@@ -1,0 +1,22 @@
+{
+  "functions": [
+    {
+      "$id": "matrice-api",
+      "name": "matrice-api", 
+      "runtime": "node-18.0",
+      "path": ".",
+      "entrypoint": "server.js",
+      "ignore": [
+        "node_modules",
+        ".git",
+        "README.md",
+        "*.log",
+        ".github",
+        "test",
+        "seed"
+      ],
+      "execute": ["users"],
+      "timeout": 900
+    }
+  ]
+}
