@@ -1,0 +1,20 @@
+{
+  "name": "matrice-profils-backend",
+  "version": "0.1.0",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "nodemon server.js"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "dotenv": "^16.6.1",
+    "express": "^4.21.2",
+    "mongoose": "^7.8.7",
+    "mongoose-paginate-v2": "^1.9.1",
+    "morgan": "^1.10.1"
+  },
+  "devDependencies": {
+    "nodemon": "^2.0.22"
+  }
+}
