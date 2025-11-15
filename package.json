@@ -2,13 +2,17 @@
   "name": "africanut-matrice-backend",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "build": "echo 'No build step required'",
+    "import-members": "node import-complete.js",
+    "dev": "node server.js"
   },
   "dependencies": {
     "express": "^4.18.2",
     "mongoose": "^7.5.0",
     "cors": "^2.8.5",
     "dotenv": "^16.3.1",
-    "morgan": "^1.10.0"
+    "morgan": "^1.10.0",
+    "node-appwrite": "^10.0.0"
   }
 }
