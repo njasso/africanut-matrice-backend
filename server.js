@@ -1,4 +1,4 @@
-// server.js - VERSION OPTIMISÉE POUR APPWRITE
+// server.js - VERSION COMPLÈTEMENT MISE À JOUR POUR APPWRITE + NETLIFY
 require('dotenv').config();
 const express = require('express');
 const mongoose = require('mongoose');
@@ -9,45 +9,78 @@ const app = express();
 
 // 🔹 CONFIGURATION SPÉCIFIQUE APPWRITE
 const isAppwrite = process.env.APPWRITE_FUNCTION_ID !== undefined;
-const PORT = process.env.PORT || 3000; // Appwrite utilise le port 3000
+const PORT = process.env.PORT || 3000;
 
-// Middleware
+// 🔹 CORRECTION : Utiliser MONGODB_URI au lieu de MONGO_URI
+const mongoURI = process.env.MONGODB_URI || process.env.MONGO_URI;
+if (!mongoURI) {
+  console.error('❌ MONGODB_URI is required');
+  process.exit(1);
+}
+
+// 🔹 MIDDLEWARE CORS OPTIMISÉ POUR NETLIFY
 app.use(cors({
   origin: function(origin, callback) {
-    // En production Appwrite, autoriser toutes les origines ou configurer spécifiquement
-    const allowedOrigins = process.env.ALLOWED_ORIGINS ? process.env.ALLOWED_ORIGINS.split(',') : ['*'];
-    if (!origin || allowedOrigins.includes('*') || allowedOrigins.includes(origin)) {
+    // Liste des origines autorisées pour Netlify
+    const allowedOrigins = process.env.ALLOWED_ORIGINS 
+      ? process.env.ALLOWED_ORIGINS.split(',') 
+      : [
+          'https://resplendent-nasturtium-1fb598.netlify.app',
+          'https://*.netlify.app',
+          'http://localhost:3000',
+          'http://localhost:5173',
+          'https://localhost:5173'
+        ];
+    
+    // En développement, autoriser toutes les origines
+    if (process.env.NODE_ENV !== 'production') {
+      return callback(null, true);
+    }
+    
+    // Vérifier si l'origine est autorisée
+    if (!origin || allowedOrigins.includes('*') || allowedOrigins.some(allowed => {
+      if (allowed.includes('*')) {
+        const regex = new RegExp('^' + allowed.replace('*.', '.*\\.') + '$');
+        return regex.test(origin);
+      }
+      return allowed === origin;
+    })) {
       callback(null, true);
     } else {
+      console.log(`🚫 CORS bloqué pour: ${origin}`);
       callback(new Error('Not allowed by CORS'));
     }
   },
-  credentials: true
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With']
 }));
 
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
-// Logging adapté pour Appwrite
+// Middleware de sécurité
+app.use((req, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('X-XSS-Protection', '1; mode=block');
+  next();
+});
+
+// Logging adapté
 if (isAppwrite) {
-  app.use(morgan('combined')); // Logs structurés pour le cloud
+  app.use(morgan('combined'));
 } else {
-  app.use(morgan('dev')); // Logs détaillés en développement
+  app.use(morgan('dev'));
 }
 
-// 🔹 CONNEXION MONGODB OPTIMISÉE POUR APPWRITE
-const mongoURI = process.env.MONGO_URI;
-if (!mongoURI) {
-  console.error('❌ MONGO_URI is required');
-  process.exit(1);
-}
-
+// 🔹 CONNEXION MONGODB
 const mongooseOptions = {
   useNewUrlParser: true,
   useUnifiedTopology: true,
-  serverSelectionTimeoutMS: 5000, // Timeout réduit pour serverless
-  socketTimeoutMS: 45000, // Timeout socket
-  maxPoolSize: 10, // Pool de connexions réduit
+  serverSelectionTimeoutMS: 5000,
+  socketTimeoutMS: 45000,
+  maxPoolSize: 10,
   minPoolSize: 1,
 };
 
@@ -55,11 +88,10 @@ mongoose.connect(mongoURI, mongooseOptions)
   .then(() => console.log('✅ MongoDB connected to Appwrite'))
   .catch(err => {
     console.error('❌ MongoDB connection error:', err);
-    // En production, on ne quitte pas le processus pour éviter les restarts boucles
     if (!isAppwrite) process.exit(1);
   });
 
-// Gestion gracieuse de la fermeture (important pour serverless)
+// Gestion gracieuse de la fermeture
 process.on('SIGTERM', async () => {
   console.log('🔻 SIGTERM received, shutting down gracefully');
   await mongoose.connection.close();
@@ -67,7 +99,7 @@ process.on('SIGTERM', async () => {
   process.exit(0);
 });
 
-// Import des modèles avec gestion d'erreur
+// Import des modèles
 let Member, Project, Group, Interaction, Skill, Specialty, Analysis;
 try {
   Member = require('./models/Member');
@@ -80,10 +112,207 @@ try {
   console.log('✅ All models loaded successfully');
 } catch (error) {
   console.error('❌ Error loading models:', error.message);
-  // En production, on continue sans les modèles manquants
 }
 
-// 🔹 ROUTE DE SANTÉ SPÉCIFIQUE APPWRITE
+// ==================== NOUVELLES ROUTES POUR NETLIFY ====================
+
+// 🔹 Route pour récupérer les membres avec filtres et pagination
+app.get('/api/v1/members/filter', async (req, res) => {
+  try {
+    if (!Member) {
+      return res.status(500).json({ message: 'Member model not available' });
+    }
+
+    const { 
+      page = 1, 
+      limit = 12, 
+      search, 
+      specialty, 
+      organization,
+      location,
+      sort = 'name'
+    } = req.query;
+
+    let query = {};
+    
+    // Filtre par recherche texte
+    if (search) {
+      query.$or = [
+        { name: { $regex: search, $options: 'i' } },
+        { title: { $regex: search, $options: 'i' } },
+        { organization: { $regex: search, $options: 'i' } },
+        { specialties: { $in: [new RegExp(search, 'i')] } },
+        { skills: { $in: [new RegExp(search, 'i')] } }
+      ];
+    }
+
+    // Filtre par spécialité
+    if (specialty) {
+      query.specialties = { $in: [new RegExp(specialty, 'i')] };
+    }
+
+    // Filtre par organisation
+    if (organization) {
+      query.organization = { $regex: organization, $options: 'i' };
+    }
+
+    // Filtre par localisation
+    if (location) {
+      query.location = { $regex: location, $options: 'i' };
+    }
+
+    const skip = (page - 1) * limit;
+    
+    const members = await Member.find(query)
+      .sort({ [sort]: 1 })
+      .skip(skip)
+      .limit(parseInt(limit))
+      .select('name title email organization specialties experienceYears photo location skills');
+
+    const total = await Member.countDocuments(query);
+    const totalPages = Math.ceil(total / limit);
+
+    res.json({
+      members,
+      pagination: {
+        currentPage: parseInt(page),
+        totalPages,
+        totalMembers: total,
+        hasNext: page < totalPages,
+        hasPrev: page > 1
+      }
+    });
+
+  } catch (err) {
+    console.error('💥 GET /api/v1/members/filter error:', err);
+    res.status(500).json({ 
+      message: 'Erreur lors de la récupération des membres',
+      error: err.message 
+    });
+  }
+});
+
+// 🔹 Route pour les détails d'un membre
+app.get('/api/v1/members/:id', async (req, res) => {
+  try {
+    if (!Member) {
+      return res.status(500).json({ message: 'Member model not available' });
+    }
+
+    const member = await Member.findById(req.params.id);
+    
+    if (!member) {
+      return res.status(404).json({ message: 'Membre non trouvé' });
+    }
+
+    res.json(member);
+  } catch (err) {
+    console.error('💥 GET /api/v1/members/:id error:', err);
+    res.status(500).json({ 
+      message: 'Erreur lors de la récupération du membre',
+      error: err.message 
+    });
+  }
+});
+
+// 🔹 Route pour les métadonnées (filtres)
+app.get('/api/v1/metadata', async (req, res) => {
+  try {
+    if (!Member) {
+      return res.status(500).json({ message: 'Member model not available' });
+    }
+
+    const specialties = await Member.distinct('specialties');
+    const organizations = await Member.distinct('organization');
+    const locations = await Member.distinct('location');
+
+    // Nettoyer et trier les données
+    const cleanData = (arr) => {
+      if (!arr) return [];
+      return arr
+        .filter(item => item && item.trim() !== '')
+        .sort((a, b) => a.localeCompare(b, 'fr', { sensitivity: 'base' }));
+    };
+
+    res.json({
+      specialties: cleanData(specialties.flat()),
+      organizations: cleanData(organizations),
+      locations: cleanData(locations)
+    });
+  } catch (err) {
+    console.error('💥 GET /api/v1/metadata error:', err);
+    res.status(500).json({ message: 'Erreur serveur', error: err.message });
+  }
+});
+
+// 🔹 Route pour les statistiques détaillées du dashboard
+app.get('/api/v1/dashboard/stats', async (req, res) => {
+  try {
+    if (!Member) {
+      return res.status(500).json({ message: 'Member model not available' });
+    }
+
+    const totalMembers = await Member.countDocuments();
+    
+    // Compter par spécialités
+    const specialtyStats = await Member.aggregate([
+      { $unwind: '$specialties' },
+      { $group: { _id: '$specialties', count: { $sum: 1 } } },
+      { $sort: { count: -1 } },
+      { $limit: 10 }
+    ]);
+
+    // Compter par organisations
+    const organizationStats = await Member.aggregate([
+      { $match: { organization: { $ne: '', $exists: true } } },
+      { $group: { _id: '$organization', count: { $sum: 1 } } },
+      { $sort: { count: -1 } },
+      { $limit: 10 }
+    ]);
+
+    // Compter par localisation
+    const locationStats = await Member.aggregate([
+      { $match: { location: { $ne: '', $exists: true } } },
+      { $group: { _id: '$location', count: { $sum: 1 } } },
+      { $sort: { count: -1 } },
+      { $limit: 10 }
+    ]);
+
+    // Statistiques d'expérience
+    const experienceStats = {
+      junior: await Member.countDocuments({ experienceYears: { $lt: 5 } }),
+      intermediate: await Member.countDocuments({ experienceYears: { $gte: 5, $lt: 10 } }),
+      senior: await Member.countDocuments({ experienceYears: { $gte: 10 } })
+    };
+
+    res.json({
+      totalMembers,
+      specialtyStats,
+      organizationStats,
+      locationStats,
+      experienceStats
+    });
+
+  } catch (err) {
+    console.error('💥 GET /api/v1/dashboard/stats error:', err);
+    res.status(500).json({ message: 'Erreur serveur', error: err.message });
+  }
+});
+
+// 🔹 Route de test CORS
+app.get('/api/v1/test-cors', (req, res) => {
+  res.json({ 
+    success: true,
+    message: 'CORS test réussi!',
+    origin: req.headers.origin,
+    timestamp: new Date().toISOString(),
+    frontend: 'https://resplendent-nasturtium-1fb598.netlify.app'
+  });
+});
+
+// ==================== ROUTES EXISTANTES ====================
+
+// 🔹 ROUTE DE SANTÉ
 app.get('/_/health', (req, res) => {
   res.json({ 
     status: 'healthy',
@@ -93,7 +322,19 @@ app.get('/_/health', (req, res) => {
   });
 });
 
-// 🔹 ROUTES SPÉCIFIQUES POUR LES GROUPES AVEC REGROUPEMENT
+app.get('/api/v1/health', (req, res) => {
+  res.json({ 
+    status: "OK", 
+    message: "Backend fonctionnel sur Appwrite",
+    platform: isAppwrite ? "appwrite" : "local",
+    timestamp: new Date().toISOString(),
+    version: "1.0.0",
+    database: mongoose.connection.readyState === 1 ? "Connected" : "Disconnected",
+    frontend: "https://resplendent-nasturtium-1fb598.netlify.app"
+  });
+});
+
+// 🔹 ROUTES POUR LES GROUPES (existantes)
 app.get('/api/v1/groups', async (req, res) => {
   try {
     if (!Group) {
@@ -119,7 +360,6 @@ app.get('/api/v1/groups', async (req, res) => {
   }
 });
 
-// 🔹 Route améliorée pour récupérer les membres d'un groupe
 app.get('/api/v1/groups/:id/members', async (req, res) => {
   const { id } = req.params;
   try {
@@ -172,7 +412,6 @@ app.get('/api/v1/groups/:id/members', async (req, res) => {
   }
 });
 
-// 🔹 Route pour créer un groupe avec validation améliorée
 app.post('/api/v1/groups', async (req, res) => {
   try {
     if (!Group) {
@@ -215,7 +454,7 @@ app.post('/api/v1/groups', async (req, res) => {
   }
 });
 
-// 🔹 ROUTES DE SYNCHRONISATION POUR LES SPÉCIALITÉS
+// 🔹 ROUTES DE SYNCHRONISATION
 app.post('/api/v1/specialties/sync', async (req, res) => {
   try {
     if (!Specialty) {
@@ -282,19 +521,7 @@ app.post('/api/v1/specialties/sync', async (req, res) => {
   }
 });
 
-// 🔹 Route de santé pour tester la connexion
-app.get('/api/v1/health', (req, res) => {
-  res.json({ 
-    status: "OK", 
-    message: "Backend fonctionnel sur Appwrite",
-    platform: isAppwrite ? "appwrite" : "local",
-    timestamp: new Date().toISOString(),
-    version: "1.0.0",
-    database: mongoose.connection.readyState === 1 ? "Connected" : "Disconnected"
-  });
-});
-
-// 🔹 Route pour les statistiques
+// 🔹 ROUTE STATISTIQUES GLOBALES
 app.get('/api/v1/stats', async (req, res) => {
   try {
     const stats = {
@@ -315,7 +542,7 @@ app.get('/api/v1/stats', async (req, res) => {
   }
 });
 
-// 🔹 FONCTION CRUD GÉNÉRIQUE OPTIMISÉE
+// 🔹 FONCTION CRUD GÉNÉRIQUE
 const createCrudRoutes = (model, routeName) => {
   const router = express.Router();
 
@@ -464,7 +691,7 @@ app.use('/api/v1/interactions', createCrudRoutes(Interaction, 'Interaction'));
 app.use('/api/v1/specialties', createCrudRoutes(Specialty, 'Specialty'));
 app.use('/api/v1/analyses', createCrudRoutes(Analysis, 'Analysis'));
 
-// 🔹 IMPORT DES ROUTES SKILLS SPÉCIFIQUES (avec gestion d'erreur)
+// 🔹 IMPORT DES ROUTES SKILLS SPÉCIFIQUES
 try {
   app.use('/api/v1/skills', require('./routes/skills'));
   console.log('✅ Skills routes loaded');
@@ -479,16 +706,20 @@ app.get('/', (req, res) => {
     version: '1.0.0',
     platform: isAppwrite ? 'appwrite' : 'local',
     timestamp: new Date().toISOString(),
+    frontend: 'https://resplendent-nasturtium-1fb598.netlify.app',
     endpoints: {
       health: '/api/v1/health',
       stats: '/api/v1/stats',
+      dashboard: '/api/v1/dashboard/stats',
+      metadata: '/api/v1/metadata',
+      members: '/api/v1/members/filter',
       groups: '/api/v1/groups',
-      members: '/api/v1/members',
       projects: '/api/v1/projects',
       skills: '/api/v1/skills',
       specialties: '/api/v1/specialties',
       analyses: '/api/v1/analyses',
-      specialtiesSync: '/api/v1/specialties/sync'
+      specialtiesSync: '/api/v1/specialties/sync',
+      testCors: '/api/v1/test-cors'
     }
   });
 });
@@ -502,8 +733,11 @@ app.use((req, res) => {
     availableEndpoints: [
       '/api/v1/health',
       '/api/v1/stats',
+      '/api/v1/dashboard/stats',
+      '/api/v1/metadata',
+      '/api/v1/members/filter',
       '/api/v1/groups',
-      '/api/v1/members'
+      '/api/v1/test-cors'
     ]
   });
 });
@@ -522,11 +756,13 @@ app.listen(PORT, '0.0.0.0', () => {
   console.log(`🚀 API started on port ${PORT}`);
   console.log(`🔧 Environment: ${process.env.NODE_ENV || 'development'}`);
   console.log(`🏗️ Platform: ${isAppwrite ? 'Appwrite' : 'Local'}`);
+  console.log(`🌐 Frontend: https://resplendent-nasturtium-1fb598.netlify.app`);
   console.log(`📊 Health check: http://0.0.0.0:${PORT}/api/v1/health`);
+  console.log(`🔍 CORS test: http://0.0.0.0:${PORT}/api/v1/test-cors`);
   
   if (isAppwrite) {
     console.log('✅ Successfully deployed on Appwrite');
   }
 });
 
-module.exports = app; // Export pour les tests
+module.exports = app;
