@@ -1,5 +1,4 @@
-// models/Group.js
-const mongoose = require('mongoose');
+import mongoose from "mongoose";
 
 const groupSchema = new mongoose.Schema({
   name: {
@@ -9,6 +8,7 @@ const groupSchema = new mongoose.Schema({
   },
   description: {
     type: String,
+    required: true,
     trim: true
   },
   type: {
@@ -39,11 +39,16 @@ const groupSchema = new mongoose.Schema({
   },
   creationType: {
     type: String,
-    enum: ["manual", "byTitle", "byOrganization"],
+    enum: ["byTitle", "byOrganization", "manual"],
     default: "manual"
   }
 }, {
   timestamps: true
 });
 
-module.exports = mongoose.model("Group", groupSchema);
+// Index pour les recherches
+groupSchema.index({ name: 'text', description: 'text', tags: 'text' });
+groupSchema.index({ type: 1 });
+groupSchema.index({ privacy: 1 });
+
+export default mongoose.model("Group", groupSchema);
