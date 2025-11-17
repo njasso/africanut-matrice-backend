@@ -1,9 +1,9 @@
-// routes/members.js - VERSION AVEC VOTRE ENDPOINT APPWRITE
+// routes/members.js - VERSION CORRIGÉE
 const express = require("express");
 const axios = require("axios");
 const router = express.Router();
 
-// Configuration AppWrite avec VOTRE ENDPOINT
+// Configuration AppWrite
 const APPWRITE_CONFIG = {
   ENDPOINT: process.env.APPWRITE_ENDPOINT || 'https://fra.cloud.appwrite.io/v1',
   PROJECT_ID: process.env.APPWRITE_PROJECT_ID || '6917d4340008cda26023',
@@ -24,7 +24,7 @@ router.use((req, res, next) => {
 // 🔹 GET tous les membres depuis AppWrite
 router.get("/", async (req, res) => {
   try {
-    console.log("🔍 Route /members - Récupération depuis AppWrite Fra");
+    console.log("🔍 Route /members - Récupération depuis AppWrite");
     
     const { 
       search, 
@@ -48,28 +48,29 @@ router.get("/", async (req, res) => {
 
     let allMembers = appwriteResponse.data?.members || [];
     
-    console.log(`📊 ${allMembers.length} membres reçus d'AppWrite Frankfurt`);
+    console.log(`📊 ${allMembers.length} membres reçus d'AppWrite`);
+
+    // 🔹 NORMALISATION COMPLÈTE DES DONNÉES
+    const normalizedMembers = normalizeMemberData(allMembers);
+    console.log(`🔄 ${normalizedMembers.length} membres normalisés`);
 
     // Si pas de données, mode démo
-    if (allMembers.length === 0) {
+    if (normalizedMembers.length === 0) {
       console.log("🔄 Aucune donnée reçue, activation mode démonstration");
-      allMembers = getDemoData();
+      normalizedMembers = getDemoData();
     }
 
     // 🔍 FILTRAGE LOCAL
-    let filteredMembers = filterMembers(allMembers, { search, specialty, location, status });
+    let filteredMembers = filterMembers(normalizedMembers, { search, specialty, location, status });
 
     // 📄 PAGINATION
     const startIndex = (parseInt(page) - 1) * parseInt(limit);
     const endIndex = startIndex + parseInt(limit);
     const paginatedMembers = filteredMembers.slice(startIndex, endIndex);
 
-    // Normalisation
-    const normalizedMembers = normalizeMemberData(paginatedMembers);
-
     res.json({ 
       success: true, 
-      data: normalizedMembers,
+      data: paginatedMembers,
       total: filteredMembers.length,
       page: parseInt(page),
       limit: parseInt(limit),
@@ -105,7 +106,10 @@ router.get("/:id", async (req, res) => {
     }
 
     const allMembers = appwriteResponse.data?.members || [];
-    const member = allMembers.find(m => m._id === req.params.id || m.id === req.params.id);
+    
+    // 🔹 NORMALISATION AVANT RECHERCHE
+    const normalizedMembers = normalizeMemberData(allMembers);
+    const member = normalizedMembers.find(m => m._id === req.params.id || m.id === req.params.id);
 
     if (!member) {
       return res.status(404).json({ 
@@ -114,11 +118,9 @@ router.get("/:id", async (req, res) => {
       });
     }
 
-    const normalizedMember = normalizeMemberData([member])[0];
-
     res.json({ 
       success: true, 
-      data: normalizedMember,
+      data: member,
       source: 'appwrite'
     });
 
@@ -149,13 +151,18 @@ router.get("/collections/all", async (req, res) => {
 
     const allData = appwriteResponse.data || {};
     
+    // 🔹 NORMALISATION DES MEMBRES DANS LES COLLECTIONS
+    if (allData.members && Array.isArray(allData.members)) {
+      allData.members = normalizeMemberData(allData.members);
+    }
+
     // Statistiques
     const stats = {};
     Object.keys(allData).forEach(collection => {
       stats[collection] = Array.isArray(allData[collection]) ? allData[collection].length : 0;
     });
 
-    console.log(`📈 Collections Frankfurt: ${Object.keys(allData).join(', ')}`);
+    console.log(`📈 Collections: ${Object.keys(allData).join(', ')}`);
 
     res.json({
       success: true,
@@ -176,7 +183,353 @@ router.get("/collections/all", async (req, res) => {
   }
 });
 
-// 🔹 GET statistiques
+// ==========================
+// FONCTIONS UTILITAIRES CORRIGÉES
+// ==========================
+
+// 🔹 FONCTION DE NORMALISATION CORRIGÉE
+function normalizeMemberData(members) {
+  if (!Array.isArray(members)) return [];
+
+  return members.map(member => {
+    console.log('🔍 Normalisation membre:', { 
+      name: member.name, 
+      specialties: member.specialties,
+      skills: member.skills,
+      types: {
+        specialties: typeof member.specialties,
+        skills: typeof member.skills
+      }
+    });
+
+    // 🔹 CONVERSION DES SPÉCIALITÉS
+    let specialties = [];
+    if (Array.isArray(member.specialties)) {
+      // Déjà un tableau - on nettoie
+      specialties = member.specialties
+        .map(spec => {
+          if (typeof spec === 'string') return spec.trim();
+          return String(spec).trim();
+        })
+        .filter(spec => spec && spec !== '' && spec !== 'null' && spec !== 'undefined');
+    } else if (typeof member.specialties === 'string') {
+      // String à convertir en tableau
+      specialties = member.specialties
+        .split(/[,;|]/) // Séparateurs: virgule, point-virgule, pipe
+        .map(spec => spec.trim())
+        .filter(spec => spec && spec !== '' && spec !== 'null' && spec !== 'undefined');
+    }
+    // Si undefined/null, reste tableau vide
+
+    // 🔹 CONVERSION DES COMPÉTENCES
+    let skills = [];
+    if (Array.isArray(member.skills)) {
+      skills = member.skills
+        .map(skill => {
+          if (typeof skill === 'string') return skill.trim();
+          return String(skill).trim();
+        })
+        .filter(skill => skill && skill !== '' && skill !== 'null' && skill !== 'undefined');
+    } else if (typeof member.skills === 'string') {
+      skills = member.skills
+        .split(/[,;|]/)
+        .map(skill => skill.trim())
+        .filter(skill => skill && skill !== '' && skill !== 'null' && skill !== 'undefined');
+    }
+
+    // 🔹 CORRECTION DU CHEMIN DE LA PHOTO
+    let photoUrl = member.photo || '';
+    if (photoUrl) {
+      // Correction des chemins relatifs
+      if (photoUrl.startsWith('../assets/photos/')) {
+        photoUrl = photoUrl.replace('../assets/photos/', '/assets/photos/');
+      }
+      // Ajouter le domaine si chemin relatif
+      if (photoUrl.startsWith('/') && !photoUrl.startsWith('//')) {
+        photoUrl = `${process.env.BASE_URL || ''}${photoUrl}`;
+      }
+    }
+
+    // 🔹 ORGANISATION/ENTREPRISE
+    const organization = member.organization || member.entreprise || '';
+    const entreprise = member.entreprise || member.organization || '';
+
+    const normalizedMember = {
+      // Identifiant
+      _id: member._id || member.id || generateId(),
+      
+      // Informations personnelles
+      name: member.name?.trim() || '',
+      title: member.title?.trim() || '',
+      email: member.email?.trim() || '',
+      phone: member.phone?.trim() || '',
+      location: member.location?.trim() || '',
+      
+      // 🔹 TABLEAUX CORRIGÉS
+      specialties: specialties,
+      skills: skills,
+      
+      // Organisation
+      organization: organization,
+      entreprise: entreprise,
+      
+      // Expérience et projets
+      experienceYears: parseInt(member.experienceYears) || 0,
+      projects: member.projects?.trim() || '',
+      bio: member.bio?.trim() || member.projects?.trim() || '', // Fallback sur projects si pas de bio
+      
+      // Statut
+      statutMembre: member.statutMembre || 'Actif',
+      
+      // Fichiers et liens
+      photo: photoUrl,
+      cvLink: member.cvLink || '',
+      linkedin: member.linkedin || '',
+      
+      // Métadonnées
+      isActive: member.isActive !== undefined ? member.isActive : true,
+      availability: member.availability || ''
+    };
+
+    console.log('✅ Membre normalisé:', {
+      name: normalizedMember.name,
+      specialties: normalizedMember.specialties,
+      skills: normalizedMember.skills,
+      specialtiesCount: normalizedMember.specialties.length,
+      skillsCount: normalizedMember.skills.length
+    });
+
+    return normalizedMember;
+  });
+}
+
+// 🔹 FONCTION DE FILTRAGE CORRIGÉE
+function filterMembers(members, filters) {
+  let filtered = [...members];
+  const { search, specialty, location, status } = filters;
+
+  if (search && search.trim()) {
+    const searchTerm = search.trim().toLowerCase();
+    filtered = filtered.filter(member => {
+      const searchText = `
+        ${member.name || ''}
+        ${member.title || ''}
+        ${member.email || ''}
+        ${member.specialties?.join(' ') || ''}
+        ${member.skills?.join(' ') || ''}
+        ${member.location || ''}
+        ${member.organization || ''}
+        ${member.entreprise || ''}
+        ${member.projects || ''}
+      `.toLowerCase();
+      
+      return searchText.includes(searchTerm);
+    });
+  }
+
+  if (specialty && specialty.trim()) {
+    const specialtyTerm = specialty.trim().toLowerCase();
+    filtered = filtered.filter(member => {
+      // Vérifie dans le tableau des spécialités
+      return member.specialties?.some(spec => 
+        spec && spec.toLowerCase().includes(specialtyTerm)
+      );
+    });
+  }
+
+  if (location && location.trim()) {
+    const locationTerm = location.trim().toLowerCase();
+    filtered = filtered.filter(member => 
+      member.location && member.location.toLowerCase().includes(locationTerm)
+    );
+  }
+
+  if (status && status.trim()) {
+    const statusTerm = status.trim().toLowerCase();
+    filtered = filtered.filter(member => 
+      member.statutMembre && member.statutMembre.toLowerCase().includes(statusTerm)
+    );
+  }
+
+  console.log(`🔍 Filtrage: ${members.length} → ${filtered.length} membres`);
+  return filtered;
+}
+
+// 🔹 FONCTION APPWRITE (inchangée)
+async function callAppWriteFunction() {
+  try {
+    console.log("🔄 Appel de la fonction AppWrite...");
+    
+    const appwriteUrl = `${APPWRITE_CONFIG.ENDPOINT}/functions/${APPWRITE_CONFIG.FUNCTION_ID}/executions`;
+    
+    const requestConfig = {
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Appwrite-Project': APPWRITE_CONFIG.PROJECT_ID,
+      },
+      timeout: 25000
+    };
+
+    if (APPWRITE_CONFIG.API_KEY) {
+      requestConfig.headers['X-Appwrite-Key'] = APPWRITE_CONFIG.API_KEY;
+    }
+
+    const response = await axios.post(appwriteUrl, {}, requestConfig);
+
+    console.log("✅ Réponse AppWrite - Status:", response.status);
+
+    let responseBody;
+    if (response.data.response) {
+      responseBody = typeof response.data.response === 'string' 
+        ? JSON.parse(response.data.response) 
+        : response.data.response;
+    } else {
+      responseBody = response.data;
+    }
+
+    console.log("📦 Structure réponse:", {
+      success: responseBody.success,
+      dataKeys: responseBody.data ? Object.keys(responseBody.data) : 'no data',
+      membersCount: responseBody.data?.members?.length || 0
+    });
+
+    return responseBody;
+
+  } catch (err) {
+    console.error("❌ Erreur appel AppWrite:", {
+      message: err.message,
+      code: err.code,
+      status: err.response?.status,
+      statusText: err.response?.statusText
+    });
+
+    return {
+      success: false,
+      message: "Erreur de connexion à AppWrite",
+      error: err.message,
+      code: err.code,
+      status: err.response?.status
+    };
+  }
+}
+
+// 🔹 GÉNÉRATEUR D'ID FALLBACK
+function generateId() {
+  return 'id_' + Math.random().toString(36).substr(2, 9);
+}
+
+// 🔹 DONNÉES DE DÉMO CORRIGÉES
+function getDemoData() {
+  return normalizeMemberData([
+    { 
+      _id: '1', 
+      name: 'Jean Dupont', 
+      specialties: ['Énergie Solaire', 'Smart Grid'], 
+      skills: ['Gestion de projet', 'Énergies renouvelables'], 
+      location: 'Douala', 
+      statutMembre: 'Actif',
+      title: 'Ingénieur Senior en Énergie',
+      email: 'jean.dupont@energie-cm.com',
+      organization: 'Energy Solutions Cameroun',
+      experienceYears: 8
+    },
+    { 
+      _id: '2', 
+      name: 'Marie Martin', 
+      specialties: ['Environnement', 'Développement Durable'], 
+      skills: ['Analyse technique', 'Audit environnemental'], 
+      location: 'Yaoundé', 
+      statutMembre: 'Actif',
+      title: 'Consultante Environnement',
+      email: 'marie.martin@eco-consult.com',
+      organization: 'EcoConsult Cameroun',
+      experienceYears: 5
+    }
+  ]);
+}
+
+// 🔹 CALCUL DES STATISTIQUES CORRIGÉ
+function calculateStats(members) {
+  const normalizedMembers = normalizeMemberData(members);
+  const totalMembers = normalizedMembers.length;
+  const activeMembers = normalizedMembers.filter(m => m.statutMembre === 'Actif').length;
+  
+  const locationStats = {};
+  const specialtyStats = {};
+  const orgStats = {};
+
+  normalizedMembers.forEach(member => {
+    // Localisations
+    if (member.location) {
+      locationStats[member.location] = (locationStats[member.location] || 0) + 1;
+    }
+
+    // Spécialités (tableau maintenant)
+    if (member.specialties && Array.isArray(member.specialties)) {
+      member.specialties.forEach(spec => {
+        if (spec) {
+          specialtyStats[spec] = (specialtyStats[spec] || 0) + 1;
+        }
+      });
+    }
+
+    // Organisations
+    const org = member.organization || member.entreprise;
+    if (org) {
+      orgStats[org] = (orgStats[org] || 0) + 1;
+    }
+  });
+
+  return {
+    totalMembers,
+    totalActive: activeMembers,
+    totalInactive: totalMembers - activeMembers,
+    locations: Object.entries(locationStats)
+      .sort(([,a], [,b]) => b - a)
+      .slice(0, 10)
+      .map(([name, count]) => ({ name, count })),
+    specialties: Object.entries(specialtyStats)
+      .sort(([,a], [,b]) => b - a)
+      .slice(0, 10)
+      .map(([name, count]) => ({ name, count })),
+    organizations: Object.entries(orgStats)
+      .sort(([,a], [,b]) => b - a)
+      .slice(0, 10)
+      .map(([name, count]) => ({ name, count }))
+  };
+}
+
+// 🔹 EXTRACTION DES MÉTADONNÉES CORRIGÉE
+function extractMetadata(members) {
+  const normalizedMembers = normalizeMemberData(members);
+  const specialties = new Set();
+  const locations = new Set();
+  const organizations = new Set();
+  const statuses = new Set();
+
+  normalizedMembers.forEach(member => {
+    // Spécialités (tableau maintenant)
+    if (member.specialties && Array.isArray(member.specialties)) {
+      member.specialties.forEach(spec => spec && specialties.add(spec));
+    }
+    
+    if (member.location) locations.add(member.location);
+    
+    const org = member.organization || member.entreprise;
+    if (org) organizations.add(org);
+    
+    if (member.statutMembre) statuses.add(member.statutMembre);
+  });
+
+  return {
+    specialties: Array.from(specialties).sort(),
+    locations: Array.from(locations).sort(),
+    organizations: Array.from(organizations).sort(),
+    statuses: Array.from(statuses).sort()
+  };
+}
+
+// Routes restantes inchangées...
 router.get("/stats/summary", async (req, res) => {
   try {
     console.log("📊 Récupération des statistiques");
@@ -189,13 +542,11 @@ router.get("/stats/summary", async (req, res) => {
     if (appwriteResponse.success) {
       allMembers = appwriteResponse.data?.members || [];
     } else {
-      // Fallback vers les données de démonstration
       allMembers = getDemoData();
       source = 'demo';
       console.log("🔄 Utilisation des données de démonstration pour les stats");
     }
 
-    // Calcul des statistiques
     const stats = calculateStats(allMembers);
 
     res.json({
@@ -215,7 +566,6 @@ router.get("/stats/summary", async (req, res) => {
   }
 });
 
-// 🔹 GET métadonnées pour les filtres
 router.get("/metadata/filters", async (req, res) => {
   try {
     console.log("🎯 Récupération des métadonnées filtres");
@@ -248,245 +598,10 @@ router.get("/metadata/filters", async (req, res) => {
   }
 });
 
-// ==========================
-// FONCTIONS UTILITAIRES
-// ==========================
-
-// 🔹 Fonction pour appeler AppWrite Frankfurt
-async function callAppWriteFunction() {
-  try {
-    console.log("🔄 Appel de la fonction AppWrite Frankfurt...");
-    
-    const appwriteUrl = `${APPWRITE_CONFIG.ENDPOINT}/functions/${APPWRITE_CONFIG.FUNCTION_ID}/executions`;
-    
-    const requestConfig = {
-      headers: {
-        'Content-Type': 'application/json',
-        'X-Appwrite-Project': APPWRITE_CONFIG.PROJECT_ID,
-      },
-      timeout: 25000
-    };
-
-    if (APPWRITE_CONFIG.API_KEY) {
-      requestConfig.headers['X-Appwrite-Key'] = APPWRITE_CONFIG.API_KEY;
-    }
-
-    const response = await axios.post(appwriteUrl, {}, requestConfig);
-
-    console.log("✅ Réponse AppWrite Frankfurt - Status:", response.status);
-
-    // 🔹 Compatibilité avec ton format actuel
-    let responseBody;
-    if (response.data.response) {
-      // ancien format AppWrite
-      responseBody = typeof response.data.response === 'string' 
-        ? JSON.parse(response.data.response) 
-        : response.data.response;
-    } else {
-      // nouveau format get-matrice
-      responseBody = response.data;
-    }
-
-    console.log("📦 Structure réponse:", {
-      success: responseBody.success,
-      dataKeys: responseBody.data ? Object.keys(responseBody.data) : 'no data',
-      membersCount: responseBody.data?.members?.length || 0
-    });
-
-    return responseBody;
-
-  } catch (err) {
-    console.error("❌ Erreur appel AppWrite Frankfurt:", {
-      message: err.message,
-      code: err.code,
-      status: err.response?.status,
-      statusText: err.response?.statusText
-    });
-
-    return {
-      success: false,
-      message: "Erreur de connexion à AppWrite Frankfurt",
-      error: err.message,
-      code: err.code,
-      status: err.response?.status
-    };
-  }
-}
-
-
-// 🔹 Fonction de filtrage
-function filterMembers(members, filters) {
-  let filtered = [...members];
-  const { search, specialty, location, status } = filters;
-
-  if (search && search.trim()) {
-    const searchTerm = search.trim().toLowerCase();
-    filtered = filtered.filter(member => 
-      JSON.stringify(member).toLowerCase().includes(searchTerm)
-    );
-  }
-
-  if (specialty && specialty.trim()) {
-    const specialtyTerm = specialty.trim().toLowerCase();
-    filtered = filtered.filter(member => {
-      const specialties = Array.isArray(member.specialties) ? member.specialties : [member.specialties];
-      return specialties.some(spec => 
-        spec && spec.toLowerCase().includes(specialtyTerm)
-      );
-    });
-  }
-
-  if (location && location.trim()) {
-    const locationTerm = location.trim().toLowerCase();
-    filtered = filtered.filter(member => 
-      member.location && member.location.toLowerCase().includes(locationTerm)
-    );
-  }
-
-  if (status && status.trim()) {
-    const statusTerm = status.trim().toLowerCase();
-    filtered = filtered.filter(member => 
-      member.statutMembre && member.statutMembre.toLowerCase().includes(statusTerm)
-    );
-  }
-
-  return filtered;
-}
-
-// 🔹 Fonction de normalisation
-function normalizeMemberData(members) {
-  return members.map(member => ({
-    _id: member._id || member.id,
-    name: member.name || '',
-    title: member.title || '',
-    email: member.email || '',
-    phone: member.phone || '',
-    location: member.location || '',
-    specialties: Array.isArray(member.specialties) 
-      ? member.specialties 
-      : (member.specialties ? [member.specialties] : []),
-    skills: Array.isArray(member.skills) 
-      ? member.skills 
-      : (member.skills ? [member.skills] : []),
-    organization: member.organization || member.entreprise || '',
-    projects: member.projects || '',
-    bio: member.bio || '',
-    statutMembre: member.statutMembre || 'Actif',
-    experienceYears: member.experienceYears || 0,
-    photo: member.photo || ''
-  }));
-}
-
-// 🔹 Fonction de calcul des statistiques
-function calculateStats(members) {
-  const totalMembers = members.length;
-  const activeMembers = members.filter(m => m.statutMembre === 'Actif').length;
-  
-  const locationStats = {};
-  const specialtyStats = {};
-  const orgStats = {};
-
-  members.forEach(member => {
-    // Localisations
-    if (member.location) {
-      locationStats[member.location] = (locationStats[member.location] || 0) + 1;
-    }
-
-    // Spécialités
-    const specialties = Array.isArray(member.specialties) ? member.specialties : [member.specialties];
-    specialties.forEach(spec => {
-      if (spec) {
-        specialtyStats[spec] = (specialtyStats[spec] || 0) + 1;
-      }
-    });
-
-    // Organisations
-    const org = member.organization || member.entreprise;
-    if (org) {
-      orgStats[org] = (orgStats[org] || 0) + 1;
-    }
-  });
-
-  return {
-    totalMembers,
-    totalActive: activeMembers,
-    totalInactive: totalMembers - activeMembers,
-    locations: Object.entries(locationStats)
-      .sort(([,a], [,b]) => b - a)
-      .slice(0, 10)
-      .map(([name, count]) => ({ name, count })),
-    specialties: Object.entries(specialtyStats)
-      .sort(([,a], [,b]) => b - a)
-      .slice(0, 10)
-      .map(([name, count]) => ({ name, count })),
-    organizations: Object.entries(orgStats)
-      .sort(([,a], [,b]) => b - a)
-      .slice(0, 10)
-      .map(([name, count]) => ({ name, count }))
-  };
-}
-
-// 🔹 Extraction des métadonnées
-function extractMetadata(members) {
-  const specialties = new Set();
-  const locations = new Set();
-  const organizations = new Set();
-  const statuses = new Set();
-
-  members.forEach(member => {
-    if (member.specialties) {
-      const specs = Array.isArray(member.specialties) ? member.specialties : [member.specialties];
-      specs.forEach(spec => spec && specialties.add(spec));
-    }
-    
-    if (member.location) locations.add(member.location);
-    
-    const org = member.organization || member.entreprise;
-    if (org) organizations.add(org);
-    
-    if (member.statutMembre) statuses.add(member.statutMembre);
-  });
-
-  return {
-    specialties: Array.from(specialties).sort(),
-    locations: Array.from(locations).sort(),
-    organizations: Array.from(organizations).sort(),
-    statuses: Array.from(statuses).sort()
-  };
-}
-
-// 🔹 Données de démonstration
-function getDemoData() {
-  return [
-    { 
-      _id: '1', 
-      name: 'Jean Dupont', 
-      specialties: ['Énergie Solaire', 'Smart Grid'], 
-      skills: ['Gestion de projet', 'Énergies renouvelables'], 
-      location: 'Douala', 
-      statutMembre: 'Actif',
-      title: 'Ingénieur Senior en Énergie',
-      email: 'jean.dupont@energie-cm.com',
-      organization: 'Energy Solutions Cameroun'
-    },
-    { 
-      _id: '2', 
-      name: 'Marie Martin', 
-      specialties: ['Environnement', 'Développement Durable'], 
-      skills: ['Analyse technique', 'Audit environnemental'], 
-      location: 'Yaoundé', 
-      statutMembre: 'Actif',
-      title: 'Consultante Environnement',
-      email: 'marie.martin@eco-consult.com',
-      organization: 'EcoConsult Cameroun'
-    }
-  ];
-}
-
-// 🔹 Route de test et debug
+// Routes de debug et health check inchangées...
 router.get("/debug/appwrite", async (req, res) => {
   try {
-    console.log("🐛 Test connexion AppWrite Frankfurt");
+    console.log("🐛 Test connexion AppWrite");
     
     const result = await callAppWriteFunction();
     
@@ -512,7 +627,6 @@ router.get("/debug/appwrite", async (req, res) => {
   }
 });
 
-// 🔹 Health check
 router.get("/health", (req, res) => {
   res.json({
     success: true,
