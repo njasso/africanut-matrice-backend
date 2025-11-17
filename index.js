@@ -1,8 +1,8 @@
-// functions/get-matrice/src/index.js - VERSION CORRIGÉE
+// functions/get-matrice-complete/src/index.js - VERSION AVEC RELATIONS
 import { MongoClient } from "mongodb";
 
 export default async function handler({ req, res, log, error }) {
-  log("🚀 Fonction Appwrite lancée : get-matrice");
+  log("🚀 Fonction Appwrite lancée : get-matrice-complete");
 
   const MONGO_URI = process.env.MONGODB_URI;
   const DB_NAME = process.env.MONGODB_DB_NAME || "matrice";
@@ -25,31 +25,92 @@ export default async function handler({ req, res, log, error }) {
 
     const db = client.db(DB_NAME);
     
-    // Récupérer seulement la collection 'members' pour commencer
-    const membersCollection = db.collection('members');
-    const members = await membersCollection.find({}).toArray();
-    
-    // Formater les données
-    const formattedMembers = members.map(member => ({
-      ...member,
-      _id: member._id?.toString()
+    // Récupérer toutes les collections
+    const [members, projects, groups, analyses, skills, specialties, interactions] = await Promise.all([
+      db.collection('members').find({}).toArray(),
+      db.collection('projects').find({}).sort({ createdAt: -1 }).toArray(),
+      db.collection('groups').find({}).toArray(),
+      db.collection('analyses').find({}).sort({ createdAt: -1 }).limit(20).toArray(),
+      db.collection('skills').find({}).toArray(),
+      db.collection('specialties').find({}).toArray(),
+      db.collection('interactions').find({}).sort({ createdAt: -1 }).limit(50).toArray()
+    ]);
+
+    // Créer des maps pour les relations
+    const memberMap = new Map(members.map(m => [m._id.toString(), m]));
+    const projectMap = new Map(projects.map(p => [p._id.toString(), p]));
+    const groupMap = new Map(groups.map(g => [g._id.toString(), g]));
+
+    // Formater les projets avec les membres populés
+    const projectsWithMembers = projects.map(project => ({
+      ...project,
+      _id: project._id.toString(),
+      members: (project.members || []).map(memberId => {
+        const member = memberMap.get(memberId?.toString());
+        return member ? {
+          _id: member._id.toString(),
+          name: member.name,
+          email: member.email,
+          title: member.title,
+          organization: member.organization
+        } : { _id: memberId?.toString(), name: 'Membre inconnu' };
+      })
+    }));
+
+    // Formater les groupes avec les membres populés
+    const groupsWithMembers = groups.map(group => ({
+      ...group,
+      _id: group._id.toString(),
+      members: (group.members || []).map(memberId => {
+        const member = memberMap.get(memberId?.toString());
+        return member ? {
+          _id: member._id.toString(),
+          name: member.name,
+          email: member.email
+        } : { _id: memberId?.toString(), name: 'Membre inconnu' };
+      }),
+      leader: group.leader ? {
+        _id: group.leader.toString(),
+        name: memberMap.get(group.leader.toString())?.name || 'Leader inconnu'
+      } : null
     }));
 
     await client.close();
-    log(`✅ ${formattedMembers.length} membres récupérés`);
 
-    // ⚡ IMPORTANT: Retourner le format EXACT attendu par le frontend
     return res.json({
       success: true,
-      data: {
-        members: formattedMembers,
-        // Vous pouvez ajouter d'autres collections plus tard
-        projects: [],
-        skills: [],
-        specialties: []
+      projects: projectsWithMembers,
+      members: members.map(m => ({
+        ...m,
+        _id: m._id.toString()
+      })),
+      groups: groupsWithMembers,
+      analyses: analyses.map(a => ({
+        ...a,
+        _id: a._id.toString()
+      })),
+      skills: skills.map(s => ({
+        ...s,
+        _id: s._id.toString()
+      })),
+      specialties: specialties.map(s => ({
+        ...s,
+        _id: s._id.toString()
+      })),
+      interactions: interactions.map(i => ({
+        ...i,
+        _id: i._id.toString()
+      })),
+      totals: {
+        members: members.length,
+        projects: projects.length,
+        groups: groups.length,
+        analyses: analyses.length,
+        skills: skills.length,
+        specialties: specialties.length,
+        interactions: interactions.length
       },
-      total: formattedMembers.length,
-      message: "Données chargées avec succès"
+      message: "Données complètes chargées avec relations"
     });
 
   } catch (err) {
@@ -57,7 +118,7 @@ export default async function handler({ req, res, log, error }) {
     if (client) await client.close();
     return res.json({ 
       success: false, 
-      error: err.message
+      message: err.message
     });
   }
 }
