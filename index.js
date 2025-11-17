@@ -1,36 +1,39 @@
-// src/function/index.js
 import { MongoClient } from "mongodb";
 
 export default async function handler({ req, res, log }) {
   try {
-    log("🚀 Fonction Appwrite lancée : get-members");
+    log("🚀 Fonction Appwrite lancée : get-matrice");
 
-    // Variables d'environnement pour MongoDB Atlas
-    const MONGO_URI = process.env.MONGO_URI;           // Exemple: mongodb+srv://user:pass@cluster0.mongodb.net
-    const DB_NAME = process.env.MONGO_DB_NAME;        // Nom de la base de données
-    const COLLECTION = process.env.MONGO_COLLECTION;  // Nom de la collection
+    const MONGO_URI = process.env.MONGO_URI;
+    const DB_NAME = process.env.MONGO_DB_NAME;
 
-    if (!MONGO_URI || !DB_NAME || !COLLECTION) {
+    if (!MONGO_URI || !DB_NAME) {
       throw new Error("Variables d'environnement MongoDB manquantes !");
     }
 
-    // Connexion à MongoDB Atlas
-    const client = new MongoClient(MONGO_URI, { 
+    const client = new MongoClient(MONGO_URI, {
       useNewUrlParser: true,
-      useUnifiedTopology: true 
+      useUnifiedTopology: true,
     });
     await client.connect();
     const db = client.db(DB_NAME);
-    const collection = db.collection(COLLECTION);
 
-    // Récupération des membres
-    const members = await collection.find({}).toArray();
+    // Liste toutes les collections de la base
+    const collections = await db.listCollections().toArray();
 
-    // Envoi de la réponse JSON
+    const data = {};
+
+    for (const col of collections) {
+      // Récupère tous les documents de chaque collection
+      const docs = await db.collection(col.name).find({}).toArray();
+      data[col.name] = docs;
+    }
+
+    // Envoi des données JSON
     if (res && res.json) {
-      res.json({ success: true, data: members });
+      res.json({ success: true, data });
     } else {
-      log({ success: true, data: members });
+      log({ success: true, data });
     }
 
     await client.close();
