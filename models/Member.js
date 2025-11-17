@@ -1,5 +1,6 @@
-// models/Member.js - VERSION OPTIMISÉE
+// models/Member.js - VERSION REFACTORED & OPTIMISÉE
 const mongoose = require("mongoose");
+const uniqueValidator = require("mongoose-unique-validator");
 
 const memberSchema = new mongoose.Schema({
   name: {
@@ -32,9 +33,7 @@ const memberSchema = new mongoose.Schema({
     type: [String],
     default: [],
     validate: {
-      validator: function(array) {
-        return array.length <= 20; // Maximum 20 spécialités
-      },
+      validator: array => array.length <= 20,
       message: "Maximum 20 spécialités autorisées"
     }
   },
@@ -42,9 +41,7 @@ const memberSchema = new mongoose.Schema({
     type: [String],
     default: [],
     validate: {
-      validator: function(array) {
-        return array.length <= 30; // Maximum 30 compétences
-      },
+      validator: array => array.length <= 30,
       message: "Maximum 30 compétences autorisées"
     }
   },
@@ -113,12 +110,12 @@ const memberSchema = new mongoose.Schema({
   toObject: { virtuals: true }
 });
 
-// 🔹 Index pour les recherches rapides
-memberSchema.index({ name: 'text', title: 'text', organization: 'text' });
+// 🔹 Plugins
+memberSchema.plugin(uniqueValidator, { message: "Erreur, {PATH} doit être unique." });
+
+// 🔹 Index texte pour recherche globale
+memberSchema.index({ name: 'text', title: 'text', organization: 'text', specialties: 'text', skills: 'text' });
 memberSchema.index({ email: 1 });
-memberSchema.index({ specialties: 1 });
-memberSchema.index({ organization: 1 });
-memberSchema.index({ location: 1 });
 memberSchema.index({ isActive: 1 });
 
 // 🔹 Virtual pour l'expérience en catégories
@@ -156,7 +153,7 @@ memberSchema.methods.getProfile = function() {
   };
 };
 
-// 🔹 Méthode statique pour les recherches avancées
+// 🔹 Méthode statique pour recherches avancées avec pagination et filtre
 memberSchema.statics.searchMembers = function(filters = {}) {
   const {
     search,
@@ -170,69 +167,74 @@ memberSchema.statics.searchMembers = function(filters = {}) {
     sort = 'name'
   } = filters;
 
+  const MAX_LIMIT = 50;
+  const realLimit = Math.min(limit, MAX_LIMIT);
+  const skip = (page - 1) * realLimit;
+
   let query = { isActive: true };
 
   // Recherche texte
   if (search) {
-    query.$or = [
-      { name: { $regex: search, $options: 'i' } },
-      { title: { $regex: search, $options: 'i' } },
-      { organization: { $regex: search, $options: 'i' } },
-      { specialties: { $in: [new RegExp(search, 'i')] } },
-      { skills: { $in: [new RegExp(search, 'i')] } }
-    ];
+    query.$text = { $search: search };
   }
 
   // Filtres spécifiques
-  if (specialties) {
-    query.specialties = { $in: Array.isArray(specialties) ? specialties : [specialties] };
-  }
-
-  if (organization) {
-    query.organization = { $regex: organization, $options: 'i' };
-  }
-
-  if (location) {
-    query.location = { $regex: location, $options: 'i' };
-  }
+  if (specialties) query.specialties = { $in: Array.isArray(specialties) ? specialties : [specialties] };
+  if (organization) query.organization = { $regex: organization, $options: 'i' };
+  if (location) query.location = { $regex: location, $options: 'i' };
 
   // Filtre expérience
-  if (minExperience !== undefined || maxExperience !== undefined) {
-    query.experienceYears = {};
-    if (minExperience !== undefined) query.experienceYears.$gte = minExperience;
-    if (maxExperience !== undefined) query.experienceYears.$lte = maxExperience;
-  }
+  const expFilter = {};
+  if (minExperience != null) expFilter.$gte = minExperience;
+  if (maxExperience != null) expFilter.$lte = maxExperience;
+  if (Object.keys(expFilter).length) query.experienceYears = expFilter;
 
-  const skip = (page - 1) * limit;
+  let sortObj = sort === 'relevance' && search ? { score: { $meta: "textScore" } } : { [sort]: 1 };
 
-  return this.find(query)
-    .sort({ [sort]: 1 })
-    .skip(skip)
-    .limit(limit);
+  return this.find(query, search ? { score: { $meta: "textScore" } } : {})
+             .sort(sortObj)
+             .skip(skip)
+             .limit(realLimit);
 };
 
-// 🔹 Middleware pre-save pour nettoyer les données
-memberSchema.pre('save', function(next) {
-  // Nettoyer les tableaux (supprimer les valeurs vides)
-  if (this.specialties) {
-    this.specialties = this.specialties
-      .map(s => s.trim())
-      .filter(s => s !== '');
-  }
+// 🔹 Méthode statique pour compter les membres filtrés (utile pour pagination)
+memberSchema.statics.countMembers = function(filters = {}) {
+  const {
+    search,
+    specialties,
+    organization,
+    location,
+    minExperience,
+    maxExperience
+  } = filters;
 
-  if (this.skills) {
-    this.skills = this.skills
-      .map(s => s.trim())
-      .filter(s => s !== '');
-  }
+  let query = { isActive: true };
+
+  if (search) query.$text = { $search: search };
+  if (specialties) query.specialties = { $in: Array.isArray(specialties) ? specialties : [specialties] };
+  if (organization) query.organization = { $regex: organization, $options: 'i' };
+  if (location) query.location = { $regex: location, $options: 'i' };
+
+  const expFilter = {};
+  if (minExperience != null) expFilter.$gte = minExperience;
+  if (maxExperience != null) expFilter.$lte = maxExperience;
+  if (Object.keys(expFilter).length) query.experienceYears = expFilter;
+
+  return this.countDocuments(query);
+};
+
+// 🔹 Middleware pre-save pour nettoyage et normalisation
+memberSchema.pre('save', function(next) {
+  // Nettoyer tableaux
+  if (this.specialties) this.specialties = this.specialties.map(s => s.trim()).filter(s => s);
+  if (this.skills) this.skills = this.skills.map(s => s.trim()).filter(s => s);
 
   // Capitaliser le nom
-  if (this.name) {
-    this.name = this.name
-      .split(' ')
-      .map(word => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
-      .join(' ');
-  }
+  if (this.name) this.name = this.name.split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()).join(' ');
+
+  // Normaliser title et organization
+  if (this.title) this.title = this.title.trim();
+  if (this.organization) this.organization = this.organization.trim();
 
   next();
 });
