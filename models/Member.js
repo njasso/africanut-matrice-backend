@@ -1,4 +1,4 @@
-// models/Member.js - VERSION REFACTORED & OPTIMISÉE
+// models/Member.js - VERSION CORRIGÉE
 const mongoose = require("mongoose");
 const uniqueValidator = require("mongoose-unique-validator");
 
@@ -29,14 +29,15 @@ const memberSchema = new mongoose.Schema({
     trim: true,
     match: [/^[\+]?[0-9\s\-\(\)]{10,}$/, "Numéro de téléphone invalide"]
   },
-  specialties: {
-    type: [String],
-    default: [],
+  // 🔹 CORRECTION : Référence au modèle Specialty
+  specialties: [{
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Specialty',
     validate: {
       validator: array => array.length <= 20,
       message: "Maximum 20 spécialités autorisées"
     }
-  },
+  }],
   skills: {
     type: [String],
     default: [],
@@ -113,8 +114,8 @@ const memberSchema = new mongoose.Schema({
 // 🔹 Plugins
 memberSchema.plugin(uniqueValidator, { message: "Erreur, {PATH} doit être unique." });
 
-// 🔹 Index texte pour recherche globale
-memberSchema.index({ name: 'text', title: 'text', organization: 'text', specialties: 'text', skills: 'text' });
+// 🔹 Index pour les spécialités (référence ObjectId)
+memberSchema.index({ specialties: 1 });
 memberSchema.index({ email: 1 });
 memberSchema.index({ isActive: 1 });
 
@@ -126,8 +127,15 @@ memberSchema.virtual('experienceLevel').get(function() {
   return "Expert";
 });
 
-// 🔹 Méthode d'instance pour le profil complet
-memberSchema.methods.getProfile = function() {
+// 🔹 Virtual pour compter les spécialités
+memberSchema.virtual('specialtiesCount').get(function() {
+  return this.specialties ? this.specialties.length : 0;
+});
+
+// 🔹 Méthode d'instance pour le profil complet avec populate
+memberSchema.methods.getProfile = async function() {
+  await this.populate('specialties');
+  
   return {
     id: this._id,
     name: this.name,
@@ -149,12 +157,44 @@ memberSchema.methods.getProfile = function() {
     linkedin: this.linkedin,
     isActive: this.isActive,
     createdAt: this.createdAt,
-    updatedAt: this.updatedAt
+    updatedAt: this.updatedAt,
+    specialtiesCount: this.specialtiesCount
   };
 };
 
-// 🔹 Méthode statique pour recherches avancées avec pagination et filtre
-memberSchema.statics.searchMembers = function(filters = {}) {
+// 🔹 Méthode pour ajouter une spécialité
+memberSchema.methods.addSpecialty = async function(specialtyId) {
+  if (!this.specialties.includes(specialtyId)) {
+    this.specialties.push(specialtyId);
+    await this.save();
+    
+    // Mettre à jour le compteur de la spécialité
+    const Specialty = mongoose.model('Specialty');
+    await Specialty.findByIdAndUpdate(specialtyId, { 
+      $inc: { memberCount: 1 } 
+    });
+  }
+  return this;
+};
+
+// 🔹 Méthode pour supprimer une spécialité
+memberSchema.methods.removeSpecialty = async function(specialtyId) {
+  const index = this.specialties.indexOf(specialtyId);
+  if (index > -1) {
+    this.specialties.splice(index, 1);
+    await this.save();
+    
+    // Mettre à jour le compteur de la spécialité
+    const Specialty = mongoose.model('Specialty');
+    await Specialty.findByIdAndUpdate(specialtyId, { 
+      $inc: { memberCount: -1 } 
+    });
+  }
+  return this;
+};
+
+// 🔹 Méthode statique pour recherches avancées avec populate
+memberSchema.statics.searchMembers = async function(filters = {}) {
   const {
     search,
     specialties,
@@ -175,11 +215,21 @@ memberSchema.statics.searchMembers = function(filters = {}) {
 
   // Recherche texte
   if (search) {
-    query.$text = { $search: search };
+    query.$or = [
+      { name: { $regex: search, $options: 'i' } },
+      { title: { $regex: search, $options: 'i' } },
+      { organization: { $regex: search, $options: 'i' } }
+    ];
   }
 
   // Filtres spécifiques
-  if (specialties) query.specialties = { $in: Array.isArray(specialties) ? specialties : [specialties] };
+  if (specialties) {
+    if (Array.isArray(specialties)) {
+      query.specialties = { $in: specialties };
+    } else {
+      query.specialties = specialties;
+    }
+  }
   if (organization) query.organization = { $regex: organization, $options: 'i' };
   if (location) query.location = { $regex: location, $options: 'i' };
 
@@ -189,44 +239,35 @@ memberSchema.statics.searchMembers = function(filters = {}) {
   if (maxExperience != null) expFilter.$lte = maxExperience;
   if (Object.keys(expFilter).length) query.experienceYears = expFilter;
 
-  let sortObj = sort === 'relevance' && search ? { score: { $meta: "textScore" } } : { [sort]: 1 };
+  let sortObj = { [sort]: 1 };
 
-  return this.find(query, search ? { score: { $meta: "textScore" } } : {})
+  const members = await this.find(query)
+             .populate('specialties')
              .sort(sortObj)
              .skip(skip)
              .limit(realLimit);
+
+  return members;
 };
 
-// 🔹 Méthode statique pour compter les membres filtrés (utile pour pagination)
-memberSchema.statics.countMembers = function(filters = {}) {
-  const {
-    search,
-    specialties,
-    organization,
-    location,
-    minExperience,
-    maxExperience
-  } = filters;
-
-  let query = { isActive: true };
-
-  if (search) query.$text = { $search: search };
-  if (specialties) query.specialties = { $in: Array.isArray(specialties) ? specialties : [specialties] };
-  if (organization) query.organization = { $regex: organization, $options: 'i' };
-  if (location) query.location = { $regex: location, $options: 'i' };
-
-  const expFilter = {};
-  if (minExperience != null) expFilter.$gte = minExperience;
-  if (maxExperience != null) expFilter.$lte = maxExperience;
-  if (Object.keys(expFilter).length) query.experienceYears = expFilter;
-
-  return this.countDocuments(query);
+// 🔹 Méthode statique pour obtenir les membres avec leurs spécialités complètes
+memberSchema.statics.getMembersWithSpecialties = function() {
+  return this.find({ isActive: true })
+             .populate('specialties')
+             .exec();
 };
 
-// 🔹 Middleware pre-save pour nettoyage et normalisation
+// 🔹 Méthode statique pour compter les membres par spécialité
+memberSchema.statics.countBySpecialty = function(specialtyId) {
+  return this.countDocuments({ 
+    specialties: specialtyId, 
+    isActive: true 
+  });
+};
+
+// 🔹 Middleware pre-save pour nettoyage
 memberSchema.pre('save', function(next) {
-  // Nettoyer tableaux
-  if (this.specialties) this.specialties = this.specialties.map(s => s.trim()).filter(s => s);
+  // Nettoyer les compétences (skills restent en String)
   if (this.skills) this.skills = this.skills.map(s => s.trim()).filter(s => s);
 
   // Capitaliser le nom
