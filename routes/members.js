@@ -1,8 +1,33 @@
-// routes/members.js - VERSION OPTIMISÉE POUR MONGO ATLAS
+// routes/members.js - VERSION CORRIGÉE POUR VOTRE STRUCTURE
 const express = require("express");
 const mongoose = require("mongoose");
-const Member = require("../models/Member");
 const router = express.Router();
+
+// 🔹 MODÈLE SIMPLIFIÉ aligné avec votre structure de données
+const memberSchema = new mongoose.Schema({
+  name: String,
+  title: String,
+  email: String,
+  phone: String,
+  location: String,
+  specialties: [String],
+  skills: [String],
+  organization: String,
+  entreprise: String,
+  projects: String,
+  bio: String,
+  statutMembre: { type: String, default: 'Actif' },
+  isActive: { type: Boolean, default: true },
+  experienceYears: Number,
+  photo: String
+}, { 
+  timestamps: true,
+  // Évite les erreurs de champs inconnus avec vos données existantes
+  strict: false
+});
+
+// Création du modèle
+const Member = mongoose.model('Member', memberSchema);
 
 // 🔹 Middleware pour valider les ObjectId
 router.param("id", (req, res, next, id) => {
@@ -13,202 +38,234 @@ router.param("id", (req, res, next, id) => {
 });
 
 // ==========================
-// ROUTES PRINCIPALES
+// ROUTES PRINCIPALES - VERSION SIMPLIFIÉE
 // ==========================
 
-// 🔹 GET tous les membres avec filtres et pagination
+// 🔹 GET tous les membres (VERSION SIMPLIFIÉE POUR TEST)
 router.get("/", async (req, res) => {
   try {
-    const { search, page = 1, limit = 12, specialty, organization, location, sort = 'name' } = req.query;
+    console.log("🔍 Route /members appelée avec query:", req.query);
+    
+    const { 
+      search, 
+      page = 1, 
+      limit = 50, 
+      specialty, 
+      location, 
+      status,
+      sort = 'name' 
+    } = req.query;
 
-    let query = { isActive: true };
+    // Query de base - plus permissif
+    let query = {};
 
-    // Fonction pour échapper les caractères spéciaux dans regex
-    const escapeRegex = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-
-    // Filtre texte
-    if (search) {
-      const safeSearch = escapeRegex(search);
+    // Filtre texte global
+    if (search && search.trim()) {
+      const searchRegex = new RegExp(search.trim(), 'i');
       query.$or = [
-        { name: { $regex: safeSearch, $options: "i" } },
-        { email: { $regex: safeSearch, $options: "i" } },
-        { title: { $regex: safeSearch, $options: "i" } },
-        { organization: { $regex: safeSearch, $options: "i" } },
-        { specialties: { $in: [new RegExp(safeSearch, 'i')] } },
-        { skills: { $in: [new RegExp(safeSearch, 'i')] } }
+        { name: searchRegex },
+        { email: searchRegex },
+        { title: searchRegex },
+        { organization: searchRegex },
+        { entreprise: searchRegex },
+        { location: searchRegex },
+        { specialties: searchRegex },
+        { skills: searchRegex }
       ];
     }
 
-    // Filtres optionnels
-    if (specialty) query.specialties = { $in: [new RegExp(escapeRegex(specialty), 'i')] };
-    if (organization) query.organization = { $regex: escapeRegex(organization), $options: 'i' };
-    if (location) query.location = { $regex: escapeRegex(location), $options: 'i' };
+    // Filtres spécifiques
+    if (specialty && specialty.trim()) {
+      query.specialties = new RegExp(specialty.trim(), 'i');
+    }
+
+    if (location && location.trim()) {
+      query.location = new RegExp(location.trim(), 'i');
+    }
+
+    if (status && status.trim()) {
+      query.statutMembre = new RegExp(status.trim(), 'i');
+    }
+
+    console.log("📋 Query MongoDB:", JSON.stringify(query, null, 2));
 
     const skip = (parseInt(page) - 1) * parseInt(limit);
 
+    // Récupération avec gestion d'erreur
     const members = await Member.find(query)
       .sort({ [sort]: 1 })
       .skip(skip)
       .limit(parseInt(limit))
-      .select('name title email organization specialties experienceYears photo location skills');
+      .lean(); // Retourne des objets JavaScript simples
 
     const total = await Member.countDocuments(query);
-    const totalPages = Math.ceil(total / parseInt(limit));
+
+    console.log(`✅ ${members.length} membres trouvés sur ${total} total`);
 
     res.json({ 
       success: true, 
-      members,
-      pagination: {
-        currentPage: parseInt(page),
-        totalPages,
-        totalMembers: total,
-        hasNext: parseInt(page) < totalPages,
-        hasPrev: parseInt(page) > 1
-      }
+      data: members,
+      total: total,
+      page: parseInt(page),
+      limit: parseInt(limit),
+      totalPages: Math.ceil(total / parseInt(limit))
     });
 
   } catch (err) {
     console.error("❌ Erreur GET /members:", err);
-    res.status(500).json({ success: false, message: "Erreur serveur lors du chargement des membres", error: err.message });
+    res.status(500).json({ 
+      success: false, 
+      message: "Erreur serveur lors du chargement des membres", 
+      error: err.message,
+      stack: process.env.NODE_ENV === 'development' ? err.stack : undefined
+    });
   }
 });
 
 // 🔹 GET un membre par ID
 router.get("/:id", async (req, res) => {
   try {
-    const member = await Member.findById(req.params.id);
-    if (!member) return res.status(404).json({ success: false, message: "Membre non trouvé" });
-    res.json({ success: true, member });
+    console.log("🔍 Récupération membre ID:", req.params.id);
+    
+    const member = await Member.findById(req.params.id).lean();
+    
+    if (!member) {
+      console.log("❌ Membre non trouvé:", req.params.id);
+      return res.status(404).json({ success: false, message: "Membre non trouvé" });
+    }
+
+    console.log("✅ Membre trouvé:", member.name);
+    res.json({ success: true, data: member });
+
   } catch (err) {
     console.error("❌ Erreur GET /members/:id:", err);
-    res.status(500).json({ success: false, message: "Erreur serveur lors de la récupération du membre", error: err.message });
+    res.status(500).json({ 
+      success: false, 
+      message: "Erreur serveur lors de la récupération du membre", 
+      error: err.message 
+    });
   }
 });
 
-// 🔹 POST créer un membre
+// 🔹 POST créer un membre (VERSION SIMPLIFIÉE)
 router.post("/", async (req, res) => {
   try {
-    const { name, email, title, organization, phone, specialties, skills, location, experienceYears, photo } = req.body;
-    if (!name || !email || !title) return res.status(400).json({ success: false, message: "Nom, email et titre sont requis" });
+    console.log("📝 Création nouveau membre:", req.body);
+    
+    const { name, email, title } = req.body;
+    
+    if (!name || !email) {
+      return res.status(400).json({ 
+        success: false, 
+        message: "Nom et email sont requis" 
+      });
+    }
 
-    const existingMember = await Member.findOne({ email });
-    if (existingMember) return res.status(409).json({ success: false, message: "Un membre avec cet email existe déjà" });
+    // Vérifier si le membre existe déjà
+    const existingMember = await Member.findOne({ email: email.trim().toLowerCase() });
+    if (existingMember) {
+      return res.status(409).json({ 
+        success: false, 
+        message: "Un membre avec cet email existe déjà" 
+      });
+    }
 
-    const member = new Member({ 
-      name, email, title, organization, phone,
-      specialties: Array.isArray(specialties) ? specialties : [],
-      skills: Array.isArray(skills) ? skills : [],
-      location, experienceYears: experienceYears || 0, photo 
-    });
+    const memberData = {
+      ...req.body,
+      // Normalisation des tableaux
+      specialties: Array.isArray(req.body.specialties) ? req.body.specialties : [],
+      skills: Array.isArray(req.body.skills) ? req.body.skills : [],
+      statutMembre: req.body.statutMembre || 'Actif',
+      isActive: req.body.isActive !== undefined ? req.body.isActive : true
+    };
 
+    const member = new Member(memberData);
     const savedMember = await member.save();
-    res.status(201).json({ success: true, message: "Membre créé avec succès", member: savedMember });
+
+    console.log("✅ Membre créé:", savedMember._id);
+    
+    res.status(201).json({ 
+      success: true, 
+      message: "Membre créé avec succès", 
+      data: savedMember 
+    });
 
   } catch (err) {
     console.error("❌ Erreur POST /members:", err);
-    if (err.name === 'ValidationError') return res.status(400).json({ success: false, message: "Données invalides", errors: err.errors });
-    res.status(500).json({ success: false, message: "Erreur serveur lors de la création du membre", error: err.message });
+    
+    if (err.name === 'ValidationError') {
+      return res.status(400).json({ 
+        success: false, 
+        message: "Données invalides", 
+        errors: err.errors 
+      });
+    }
+    
+    res.status(500).json({ 
+      success: false, 
+      message: "Erreur serveur lors de la création du membre", 
+      error: err.message 
+    });
   }
 });
 
-// 🔹 PUT modifier un membre
-router.put("/:id", async (req, res) => {
+// 🔹 ROUTE DE TEST - Récupère tous les membres sans filtre
+router.get("/debug/all", async (req, res) => {
   try {
-    const updatedMember = await Member.findByIdAndUpdate(req.params.id, req.body, { new: true, runValidators: true });
-    if (!updatedMember) return res.status(404).json({ success: false, message: "Membre non trouvé" });
-    res.json({ success: true, message: "Membre mis à jour", member: updatedMember });
+    console.log("🐛 Route debug - Récupération de TOUS les membres");
+    
+    const allMembers = await Member.find({}).limit(100).lean();
+    
+    console.log(`📊 ${allMembers.length} membres trouvés dans la collection`);
+    
+    // Affiche un échantillon pour debug
+    if (allMembers.length > 0) {
+      console.log("📝 Échantillon du premier membre:", JSON.stringify(allMembers[0], null, 2));
+    }
+
+    res.json({ 
+      success: true, 
+      total: allMembers.length,
+      data: allMembers,
+      sample: allMembers.length > 0 ? allMembers[0] : null
+    });
+
   } catch (err) {
-    console.error("❌ Erreur PUT /members/:id:", err);
-    if (err.name === 'ValidationError') return res.status(400).json({ success: false, message: "Données invalides", errors: err.errors });
-    res.status(500).json({ success: false, message: "Erreur serveur lors de la modification du membre", error: err.message });
+    console.error("❌ Erreur route debug:", err);
+    res.status(500).json({ 
+      success: false, 
+      message: "Erreur debug", 
+      error: err.message 
+    });
   }
 });
 
-// 🔹 DELETE soft delete
-router.delete("/:id", async (req, res) => {
+// 🔹 ROUTE DE TEST - Compte les documents
+router.get("/debug/count", async (req, res) => {
   try {
-    const deletedMember = await Member.findByIdAndUpdate(req.params.id, { isActive: false }, { new: true });
-    if (!deletedMember) return res.status(404).json({ success: false, message: "Membre non trouvé" });
-    res.json({ success: true, message: "Membre supprimé avec succès" });
-  } catch (err) {
-    console.error("❌ Erreur DELETE /members/:id:", err);
-    res.status(500).json({ success: false, message: "Erreur serveur lors de la suppression du membre", error: err.message });
-  }
-});
-
-// ==========================
-// ROUTES SPÉCIALISÉES
-// ==========================
-
-// 🔹 GET statistiques des membres
-router.get("/stats/summary", async (req, res) => {
-  try {
-    const [totalMembers, totalActive, orgStats, specialtyStats, junior, intermediate, senior] = await Promise.all([
-      Member.countDocuments(),
-      Member.countDocuments({ isActive: true }),
-      Member.aggregate([
-        { $match: { organization: { $ne: '', $exists: true } } },
-        { $group: { _id: '$organization', count: { $sum: 1 } } },
-        { $sort: { count: -1 } },
-        { $limit: 10 }
-      ]),
-      Member.aggregate([
-        { $unwind: '$specialties' },
-        { $group: { _id: '$specialties', count: { $sum: 1 } } },
-        { $sort: { count: -1 } },
-        { $limit: 10 }
-      ]),
-      Member.countDocuments({ experienceYears: { $lt: 5 } }),
-      Member.countDocuments({ experienceYears: { $gte: 5, $lt: 10 } }),
-      Member.countDocuments({ experienceYears: { $gte: 10 } }),
+    const totalCount = await Member.countDocuments({});
+    const activeCount = await Member.countDocuments({ isActive: true });
+    const statusCounts = await Member.aggregate([
+      { $group: { _id: '$statutMembre', count: { $sum: 1 } } }
     ]);
 
     res.json({
       success: true,
-      stats: {
-        totalMembers,
-        totalActive,
-        organizations: orgStats,
-        specialties: specialtyStats,
-        experience: { junior, intermediate, senior }
+      counts: {
+        total: totalCount,
+        active: activeCount,
+        byStatus: statusCounts
       }
     });
+
   } catch (err) {
-    console.error("❌ Erreur GET /members/stats/summary:", err);
-    res.status(500).json({ success: false, message: "Erreur serveur lors du chargement des statistiques", error: err.message });
-  }
-});
-
-// 🔹 GET métadonnées pour les filtres
-router.get("/metadata/filters", async (req, res) => {
-  try {
-    const specialties = await Member.distinct('specialties');
-    const organizations = await Member.distinct('organization');
-    const locations = await Member.distinct('location');
-
-    const cleanData = (arr) => arr?.filter(i => i && i.trim() !== '').sort((a,b) => a.localeCompare(b,'fr',{sensitivity:'base'})) || [];
-
-    res.json({
-      success: true,
-      metadata: {
-        specialties: cleanData(specialties.flat()),
-        organizations: cleanData(organizations),
-        locations: cleanData(locations)
-      }
+    console.error("❌ Erreur count debug:", err);
+    res.status(500).json({ 
+      success: false, 
+      message: "Erreur count", 
+      error: err.message 
     });
-  } catch (err) {
-    console.error("❌ Erreur GET /members/metadata/filters:", err);
-    res.status(500).json({ success: false, message: "Erreur serveur lors du chargement des métadonnées", error: err.message });
   }
 });
 
 module.exports = router;
-
-/*
-💡 Suggestion pour MongoDB Atlas:
-- Créer des indexes pour accélérer les recherches:
-  MemberSchema.index({ name: 1 });
-  MemberSchema.index({ email: 1 });
-  MemberSchema.index({ specialties: 1 });
-  MemberSchema.index({ organization: 1 });
-*/
