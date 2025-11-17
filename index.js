@@ -1,4 +1,4 @@
-// functions/get-matrice/src/index.js - VERSION CORRIGÉE
+// functions/get-matrice/src/index.js - VERSION CORRIGÉE POUR LE FRONTEND
 import { MongoClient } from "mongodb";
 
 export default async function handler({ req, res, log, error }) {
@@ -25,9 +25,13 @@ export default async function handler({ req, res, log, error }) {
 
     const db = client.db(DB_NAME);
     
-    // Récupérer seulement la collection 'members' pour commencer
+    // Récupérer les membres
     const membersCollection = db.collection('members');
     const members = await membersCollection.find({}).toArray();
+    
+    // Récupérer les projets
+    const projectsCollection = db.collection('projects');
+    const projects = await projectsCollection.find({}).toArray();
     
     // Formater les données
     const formattedMembers = members.map(member => ({
@@ -35,21 +39,27 @@ export default async function handler({ req, res, log, error }) {
       _id: member._id?.toString()
     }));
 
-    await client.close();
-    log(`✅ ${formattedMembers.length} membres récupérés`);
+    const formattedProjects = projects.map(project => ({
+      ...project,
+      _id: project._id?.toString(),
+      // Assurer que les champs requis existent
+      title: project.title || "Sans titre",
+      description: project.description || "",
+      organization: project.organization || "",
+      status: project.status || "idea",
+      tags: project.tags || [],
+      members: project.members || [],
+      createdAt: project.createdAt || new Date()
+    }));
 
-    // ⚡ IMPORTANT: Retourner le format EXACT attendu par le frontend
+    await client.close();
+    log(`✅ ${formattedMembers.length} membres et ${formattedProjects.length} projets récupérés`);
+
+    // ⚡ FORMAT CORRIGÉ : Retourner le format exact attendu par le frontend
     return res.json({
       success: true,
-      data: {
-        members: formattedMembers,
-        // Vous pouvez ajouter d'autres collections plus tard
-        projects: [],
-        skills: [],
-        specialties: []
-      },
-      total: formattedMembers.length,
-      message: "Données chargées avec succès"
+      members: formattedMembers,  // Directement à la racine
+      projects: formattedProjects // Directement à la racine
     });
 
   } catch (err) {
@@ -57,7 +67,7 @@ export default async function handler({ req, res, log, error }) {
     if (client) await client.close();
     return res.json({ 
       success: false, 
-      error: err.message
+      message: err.message
     });
   }
 }
