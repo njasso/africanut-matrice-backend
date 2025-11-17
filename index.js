@@ -1,26 +1,37 @@
 import { MongoClient } from "mongodb";
 
 export default async function handler({ req, res, log }) {
+  log("🚀 Fonction Appwrite lancée : get-matrice");
+
+  const MONGO_URI = process.env.MONGODB_URI;
+  const DB_NAME = process.env.MONGO_DB_NAME;
+
+  if (!MONGO_URI || !DB_NAME) {
+    const msg = "❌ Variables d'environnement MongoDB manquantes !";
+    log(msg);
+    if (res && res.status) return res.status(500).json({ success: false, message: msg });
+    return;
+  }
+
+  let client;
+
   try {
-    log("🚀 Fonction Appwrite lancée : get-matrice");
-
-    const MONGO_URI = process.env.MONGO_URI;
-    const DB_NAME = process.env.MONGO_DB_NAME;
-
-    if (!MONGO_URI || !DB_NAME) {
-      throw new Error("Variables d'environnement MongoDB manquantes !");
-    }
-
-    const client = new MongoClient(MONGO_URI, {
+    client = new MongoClient(MONGO_URI, {
       useNewUrlParser: true,
       useUnifiedTopology: true,
     });
 
     await client.connect();
+    log("✅ Connecté à MongoDB Atlas");
+
     const db = client.db(DB_NAME);
 
     // Liste toutes les collections
     const collections = await db.listCollections().toArray();
+    if (!collections || collections.length === 0) {
+      log("⚠️ Aucune collection trouvée dans la base");
+      return res.json({ success: true, data: {} });
+    }
 
     const data = {};
 
@@ -31,20 +42,13 @@ export default async function handler({ req, res, log }) {
     }
 
     await client.close();
+    log("🔒 Connexion MongoDB fermée");
 
-    // Retourne les données JSON à Appwrite
-    if (res && res.json) {
-      return res.json({ success: true, data });
-    } else {
-      log({ success: true, data });
-      return context.res.empty();
-    }
+    return res.json({ success: true, data });
+
   } catch (err) {
-    log("❌ Erreur dans la fonction Appwrite :", err.message);
-    if (res && res.status) {
-      return res.status(500).json({ success: false, error: err.message });
-    } else {
-      return context.res.empty();
-    }
+    log("❌ Erreur dans la fonction get-matrice :", err.message);
+    if (client) await client.close();
+    return res.status(500).json({ success: false, error: err.message });
   }
 }
