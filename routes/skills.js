@@ -1,15 +1,35 @@
-// routes/skills.js - VERSION CONFIGURÉE ET OPTIMISÉE
+// routes/skills.js - VERSION APPWRITE AVEC MONGODB ATLAS
 const express = require('express');
 const router = express.Router();
-const Skill = require('../models/Skill');
-const Member = require('../models/Member');
+const { Client, Databases, ID, Query } = require('node-appwrite');
 
-// Configuration
+// Configuration AppWrite avec VOTRE ENDPOINT
+const APPWRITE_CONFIG = {
+  ENDPOINT: process.env.APPWRITE_ENDPOINT || 'https://fra.cloud.appwrite.io/v1',
+  PROJECT_ID: process.env.APPWRITE_PROJECT_ID || '6917d4340008cda26023',
+  FUNCTION_ID: process.env.APPWRITE_FUNCTION_ID || '6917e0420005d9ac19c9',
+  API_KEY: process.env.APPWRITE_API_KEY
+};
+
+// Configuration de la base de données MongoDB Atlas connectée à Appwrite
+const DATABASE_ID = 'matrice'; // Votre base de données MongoDB Atlas
+const SKILLS_COLLECTION_ID = 'skills'; // Collection dans MongoDB Atlas
+const MEMBERS_COLLECTION_ID = 'members'; // Collection dans MongoDB Atlas
+
+// Initialisation du client Appwrite
+const client = new Client()
+    .setEndpoint(APPWRITE_CONFIG.ENDPOINT)
+    .setProject(APPWRITE_CONFIG.PROJECT_ID)
+    .setKey(APPWRITE_CONFIG.API_KEY);
+
+const databases = new Databases(client);
+
+// Configuration des compétences
 const SKILLS_CONFIG = {
   defaultLimit: 100,
   maxLimit: 500,
   sortFields: ['name', 'memberCount', 'popularity', 'category', 'createdAt', 'updatedAt'],
-  defaultSort: '-memberCount',
+  defaultSort: 'memberCountDesc',
   categories: {
     langage: ['javascript', 'python', 'java', 'typescript', 'php', 'ruby', 'go', 'c#', 'c++', 'swift', 'html', 'css', 'sql'],
     technique: ['react', 'angular', 'vue', 'node', 'express', 'django', 'spring', 'docker', 'kubernetes', 'mongodb', 'mysql', 'postgresql'],
@@ -25,7 +45,6 @@ const SKILLS_CONFIG = {
 const validateQueryParams = (req, res, next) => {
   const { limit, sort, category, search } = req.query;
   
-  // Validation de la limite
   if (limit && (isNaN(limit) || parseInt(limit) <= 0)) {
     return res.status(400).json({
       success: false,
@@ -33,18 +52,10 @@ const validateQueryParams = (req, res, next) => {
     });
   }
   
-  // Validation du tri
-  if (sort && !isValidSortField(sort)) {
-    return res.status(400).json({
-      success: false,
-      message: `Le champ de tri '${sort}' n'est pas valide. Champs disponibles: ${SKILLS_CONFIG.sortFields.join(', ')}`
-    });
-  }
-  
   next();
 };
 
-// GET /api/v1/skills - Récupérer toutes les compétences avec filtres
+// GET /api/v1/skills - Récupérer toutes les compétences
 router.get('/', validateQueryParams, async (req, res) => {
   try {
     const { 
@@ -56,45 +67,58 @@ router.get('/', validateQueryParams, async (req, res) => {
     
     console.log(`🛠️ GET /api/v1/skills request - limit: ${limit}, sort: ${sort}, category: ${category}, search: ${search}`);
     
-    // Construction de la requête
-    const query = {};
+    // Construction des queries Appwrite
+    const queries = [];
     
     // Filtre par catégorie
     if (category && category !== 'all') {
-      query.category = category;
+      queries.push(Query.equal('category', category));
     }
     
     // Filtre par recherche textuelle
     if (search) {
-      query.$or = [
-        { name: { $regex: search, $options: 'i' } },
-        { description: { $regex: search, $options: 'i' } }
-      ];
+      queries.push(Query.search('name', search));
     }
     
-    const actualLimit = Math.min(parseInt(limit), SKILLS_CONFIG.maxLimit);
+    // Gestion du tri
+    let sortQuery;
+    switch(sort) {
+      case 'name':
+        sortQuery = Query.orderAsc('name');
+        break;
+      case '-name':
+        sortQuery = Query.orderDesc('name');
+        break;
+      case 'memberCount':
+        sortQuery = Query.orderAsc('memberCount');
+        break;
+      case '-memberCount':
+      default:
+        sortQuery = Query.orderDesc('memberCount');
+        break;
+    }
     
-    const skills = await Skill.find(query)
-      .sort(sort)
-      .limit(actualLimit)
-      .lean();
+    queries.push(sortQuery);
+    
+    // Limite
+    const actualLimit = Math.min(parseInt(limit), SKILLS_CONFIG.maxLimit);
+    queries.push(Query.limit(actualLimit));
 
-    // Statistiques supplémentaires
-    const totalSkills = await Skill.countDocuments();
-    const categoriesStats = await Skill.aggregate([
-      { $group: { _id: '$category', count: { $sum: 1 } } }
-    ]);
+    // Récupération depuis Appwrite (qui interroge MongoDB Atlas)
+    const response = await databases.listDocuments(
+      DATABASE_ID,
+      SKILLS_COLLECTION_ID,
+      queries
+    );
 
     res.json({
       success: true,
-      data: skills,
+      data: response.documents,
       pagination: {
         limit: actualLimit,
-        total: skills.length,
-        totalSkills
+        total: response.total
       },
       filters: {
-        categories: categoriesStats,
         availableCategories: Object.keys(SKILLS_CONFIG.categories)
       }
     });
@@ -108,38 +132,58 @@ router.get('/', validateQueryParams, async (req, res) => {
   }
 });
 
-// GET /api/v1/skills/stats - Statistiques des compétences
+// GET /api/v1/skills/stats/overview - Statistiques des compétences
 router.get('/stats/overview', async (req, res) => {
   try {
-    console.log('📊 GET /api/v1/skills/stats request');
+    console.log('📊 GET /api/v1/skills/stats/overview request');
     
-    const totalSkills = await Skill.countDocuments();
-    const totalMembersWithSkills = await Member.countDocuments({ 
-      skills: { $exists: true, $not: { $size: 0 } } 
-    });
+    // Récupérer toutes les compétences
+    const skillsResponse = await databases.listDocuments(
+      DATABASE_ID,
+      SKILLS_COLLECTION_ID
+    );
     
-    const popularSkills = await Skill.find()
-      .sort({ memberCount: -1 })
-      .limit(5)
-      .select('name memberCount popularity')
-      .lean();
-      
-    const categoriesStats = await Skill.aggregate([
-      { 
-        $group: { 
-          _id: '$category', 
-          count: { $sum: 1 },
-          totalMembers: { $sum: '$memberCount' }
-        } 
-      },
-      { $sort: { count: -1 } }
-    ]);
+    // Récupérer les membres avec compétences
+    const membersResponse = await databases.listDocuments(
+      DATABASE_ID,
+      MEMBERS_COLLECTION_ID,
+      [Query.isNotNull('skills')]
+    );
     
-    const recentSkills = await Skill.find()
-      .sort({ createdAt: -1 })
-      .limit(5)
-      .select('name createdAt category')
-      .lean();
+    const totalSkills = skillsResponse.total;
+    const totalMembersWithSkills = membersResponse.documents.filter(member => 
+      member.skills && member.skills.length > 0
+    ).length;
+    
+    // Compétences populaires
+    const popularSkills = skillsResponse.documents
+      .sort((a, b) => b.memberCount - a.memberCount)
+      .slice(0, 5)
+      .map(skill => ({
+        name: skill.name,
+        memberCount: skill.memberCount,
+        popularity: skill.popularity
+      }));
+    
+    // Statistiques par catégorie
+    const categoriesStats = skillsResponse.documents.reduce((acc, skill) => {
+      if (!acc[skill.category]) {
+        acc[skill.category] = { count: 0, totalMembers: 0 };
+      }
+      acc[skill.category].count++;
+      acc[skill.category].totalMembers += skill.memberCount;
+      return acc;
+    }, {});
+    
+    // Compétences récentes
+    const recentSkills = skillsResponse.documents
+      .sort((a, b) => new Date(b.$createdAt || b.createdAt) - new Date(a.$createdAt || a.createdAt))
+      .slice(0, 5)
+      .map(skill => ({
+        name: skill.name,
+        createdAt: skill.$createdAt || skill.createdAt,
+        category: skill.category
+      }));
 
     res.json({
       success: true,
@@ -147,13 +191,19 @@ router.get('/stats/overview', async (req, res) => {
         totalSkills,
         totalMembersWithSkills,
         popularSkills,
-        categories: categoriesStats,
+        categories: Object.entries(categoriesStats).map(([name, stats]) => ({ 
+          name, 
+          count: stats.count,
+          totalMembers: stats.totalMembers 
+        })),
         recentSkills,
-        averagePopularity: popularSkills.reduce((acc, skill) => acc + skill.popularity, 0) / popularSkills.length
+        averagePopularity: popularSkills.length > 0 
+          ? popularSkills.reduce((acc, skill) => acc + (skill.popularity || 0), 0) / popularSkills.length 
+          : 0
       }
     });
   } catch (err) {
-    console.error('💥 GET /api/v1/skills/stats error:', err);
+    console.error('💥 GET /api/v1/skills/stats/overview error:', err);
     res.status(500).json({ 
       success: false,
       message: 'Erreur lors de la récupération des statistiques',
@@ -167,7 +217,13 @@ router.post('/sync', async (req, res) => {
   try {
     console.log("🔄 POST /api/v1/skills/sync request");
     
-    const members = await Member.find();
+    // Récupérer tous les membres
+    const membersResponse = await databases.listDocuments(
+      DATABASE_ID,
+      MEMBERS_COLLECTION_ID
+    );
+    
+    const members = membersResponse.documents;
     const skillMap = new Map();
 
     console.log(`📊 Analyse de ${members.length} membres...`);
@@ -199,10 +255,20 @@ router.post('/sync', async (req, res) => {
     const results = {
       created: 0,
       updated: 0,
-      deleted: 0,
       errors: [],
       skipped: 0
     };
+
+    // Récupérer les compétences existantes
+    const existingSkillsResponse = await databases.listDocuments(
+      DATABASE_ID,
+      SKILLS_COLLECTION_ID
+    );
+    
+    const existingSkillsMap = new Map();
+    existingSkillsResponse.documents.forEach(skill => {
+      existingSkillsMap.set(skill.name.toLowerCase(), skill);
+    });
 
     // Synchroniser avec la base de données
     for (const [key, data] of skillMap) {
@@ -213,30 +279,39 @@ router.post('/sync', async (req, res) => {
           continue;
         }
 
-        const existingSkill = await Skill.findOne({ 
-          name: { $regex: new RegExp(`^${data.name}$`, 'i') } 
-        });
+        const existingSkill = existingSkillsMap.get(data.name.toLowerCase());
 
         if (existingSkill) {
-          await Skill.findByIdAndUpdate(
-            existingSkill._id,
+          // Mettre à jour la compétence existante
+          await databases.updateDocument(
+            DATABASE_ID,
+            SKILLS_COLLECTION_ID,
+            existingSkill.$id,
             {
               name: data.name,
               category: data.category,
               memberCount: data.memberCount,
               popularity: members.length > 0 ? (data.memberCount / members.length) * 100 : 0,
-              updatedAt: new Date()
+              updatedAt: new Date().toISOString()
             }
           );
           results.updated++;
         } else {
-          await Skill.create({
-            name: data.name,
-            category: data.category,
-            memberCount: data.memberCount,
-            popularity: members.length > 0 ? (data.memberCount / members.length) * 100 : 0,
-            description: generateSkillDescription(data.name, data.category)
-          });
+          // Créer une nouvelle compétence
+          await databases.createDocument(
+            DATABASE_ID,
+            SKILLS_COLLECTION_ID,
+            ID.unique(),
+            {
+              name: data.name,
+              category: data.category,
+              memberCount: data.memberCount,
+              popularity: members.length > 0 ? (data.memberCount / members.length) * 100 : 0,
+              description: generateSkillDescription(data.name, data.category),
+              createdAt: new Date().toISOString(),
+              updatedAt: new Date().toISOString()
+            }
+          );
           results.created++;
         }
       } catch (error) {
@@ -245,7 +320,12 @@ router.post('/sync', async (req, res) => {
       }
     }
 
-    const skills = await Skill.find().sort({ memberCount: -1 });
+    // Récupérer les compétences mises à jour
+    const updatedSkillsResponse = await databases.listDocuments(
+      DATABASE_ID,
+      SKILLS_COLLECTION_ID,
+      [Query.orderDesc('memberCount'), Query.limit(20)]
+    );
     
     console.log(`✅ Synchronisation terminée: ${results.created} créées, ${results.updated} mises à jour, ${results.skipped} ignorées`);
 
@@ -253,7 +333,7 @@ router.post('/sync', async (req, res) => {
       success: true,
       message: `Synchronisation terminée: ${results.created} créées, ${results.updated} mises à jour, ${results.skipped} ignorées`,
       stats: results,
-      data: skills.slice(0, 20) // Retourne seulement les 20 premières pour éviter des réponses trop lourdes
+      data: updatedSkillsResponse.documents
     });
 
   } catch (err) {
@@ -261,119 +341,112 @@ router.post('/sync', async (req, res) => {
     res.status(500).json({ 
       success: false,
       message: 'Erreur lors de la synchronisation des compétences',
-      error: err.message,
-      details: process.env.NODE_ENV === 'development' ? err.stack : undefined
+      error: err.message
     });
   }
 });
 
-// POST /api/v1/skills/batch - Créer plusieurs compétences en une seule requête
-router.post('/batch', async (req, res) => {
+// POST /api/v1/skills - Créer une nouvelle compétence
+router.post('/', async (req, res) => {
   try {
-    const { skills } = req.body;
+    const { name, category, description } = req.body;
     
-    if (!skills || !Array.isArray(skills)) {
+    if (!name) {
       return res.status(400).json({ 
         success: false,
-        message: 'Le tableau des compétences est requis' 
+        message: 'Le nom de la compétence est requis' 
       });
     }
 
-    if (skills.length > 50) {
-      return res.status(400).json({ 
-        success: false,
-        message: 'Maximum 50 compétences par requête' 
-      });
+    const formattedName = formatSkillName(name.trim());
+    
+    // Vérifier si la compétence existe déjà
+    try {
+      const existingSkills = await databases.listDocuments(
+        DATABASE_ID,
+        SKILLS_COLLECTION_ID,
+        [Query.equal('name', formattedName)]
+      );
+      
+      if (existingSkills.total > 0) {
+        return res.status(409).json({ 
+          success: false,
+          message: 'Cette compétence existe déjà' 
+        });
+      }
+    } catch (error) {
+      // Continuer si aucune compétence trouvée
     }
 
-    const results = {
-      created: 0,
-      skipped: 0,
-      errors: []
+    const skillData = {
+      name: formattedName,
+      category: category || categorizeSkill(formattedName),
+      description: description || generateSkillDescription(formattedName, category),
+      memberCount: 0,
+      popularity: 0,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
     };
 
-    const createdSkills = [];
-
-    for (const skillData of skills) {
-      try {
-        const { name, category, description } = skillData;
-        
-        if (!name || name.trim().length < 2) {
-          results.skipped++;
-          continue;
-        }
-
-        const formattedName = formatSkillName(name.trim());
-        
-        // Vérifier si la compétence existe déjà
-        const existingSkill = await Skill.findOne({ 
-          name: { $regex: new RegExp(`^${formattedName}$`, 'i') } 
-        });
-        
-        if (existingSkill) {
-          results.skipped++;
-          continue;
-        }
-
-        const skill = await Skill.create({
-          name: formattedName,
-          category: category || categorizeSkill(formattedName),
-          description: description || generateSkillDescription(formattedName, category),
-          memberCount: 0,
-          popularity: 0
-        });
-
-        createdSkills.push(skill);
-        results.created++;
-        
-      } catch (error) {
-        results.errors.push(`Erreur avec ${skillData.name}: ${error.message}`);
-      }
-    }
-
+    const skill = await databases.createDocument(
+      DATABASE_ID,
+      SKILLS_COLLECTION_ID,
+      ID.unique(),
+      skillData
+    );
+    
+    console.log(`✅ Compétence créée: ${skill.name}`);
+    
     res.status(201).json({
       success: true,
-      data: createdSkills,
-      stats: results,
-      message: `Création par lot terminée: ${results.created} créées, ${results.skipped} ignorées`
+      data: skill,
+      message: 'Compétence créée avec succès'
     });
   } catch (err) {
-    console.error('💥 POST /api/v1/skills/batch error:', err);
+    console.error('💥 POST /api/v1/skills error:', err);
     res.status(500).json({ 
       success: false,
-      message: 'Erreur lors de la création par lot des compétences',
+      message: 'Erreur lors de la création de la compétence',
       error: err.message 
     });
   }
 });
 
-// Les autres routes restent similaires mais avec des améliorations
-// GET /api/v1/skills/:id
+// GET /api/v1/skills/:id - Récupérer une compétence spécifique
 router.get('/:id', async (req, res) => {
   try {
-    const skill = await Skill.findById(req.params.id);
-    if (!skill) {
+    const skill = await databases.getDocument(
+      DATABASE_ID,
+      SKILLS_COLLECTION_ID,
+      req.params.id
+    );
+    
+    // Récupérer les membres ayant cette compétence
+    const membersWithSkill = await databases.listDocuments(
+      DATABASE_ID,
+      MEMBERS_COLLECTION_ID,
+      [
+        Query.search('skills', skill.name),
+        Query.limit(10),
+        Query.select(['name', 'email', 'position', 'department'])
+      ]
+    );
+    
+    res.json({
+      success: true,
+      data: {
+        ...skill,
+        members: membersWithSkill.documents
+      }
+    });
+  } catch (err) {
+    if (err.code === 404) {
       return res.status(404).json({ 
         success: false,
         message: 'Compétence non trouvée' 
       });
     }
     
-    // Récupérer les membres ayant cette compétence
-    const membersWithSkill = await Member.find({
-      skills: { 
-        $regex: new RegExp(`^${skill.name}$`, 'i') 
-      }
-    }).select('name email position department').limit(10);
-    
-    res.json({
-      success: true,
-      data: {
-        ...skill.toObject(),
-        members: membersWithSkill
-      }
-    });
-  } catch (err) {
     console.error('💥 GET /api/v1/skills/:id error:', err);
     res.status(500).json({ 
       success: false,
@@ -383,7 +456,7 @@ router.get('/:id', async (req, res) => {
   }
 });
 
-// PUT /api/v1/skills/:id
+// PUT /api/v1/skills/:id - Mettre à jour une compétence
 router.put('/:id', async (req, res) => {
   try {
     const { name, category, description } = req.body;
@@ -398,7 +471,7 @@ router.put('/:id', async (req, res) => {
     
     const updateData = { 
       ...req.body, 
-      updatedAt: new Date() 
+      updatedAt: new Date().toISOString() 
     };
     
     // Formater le nom si fourni
@@ -406,18 +479,12 @@ router.put('/:id', async (req, res) => {
       updateData.name = formatSkillName(name.trim());
     }
 
-    const skill = await Skill.findByIdAndUpdate(
+    const skill = await databases.updateDocument(
+      DATABASE_ID,
+      SKILLS_COLLECTION_ID,
       req.params.id,
-      updateData,
-      { new: true, runValidators: true }
+      updateData
     );
-    
-    if (!skill) {
-      return res.status(404).json({ 
-        success: false,
-        message: 'Compétence non trouvée' 
-      });
-    }
     
     res.json({
       success: true,
@@ -425,25 +492,15 @@ router.put('/:id', async (req, res) => {
       message: 'Compétence mise à jour avec succès'
     });
   } catch (err) {
+    if (err.code === 404) {
+      return res.status(404).json({ 
+        success: false,
+        message: 'Compétence non trouvée' 
+      });
+    }
+    
     console.error('💥 PUT /api/v1/skills/:id error:', err);
-    
-    if (err.name === 'ValidationError') {
-      const errors = Object.values(err.errors).map(error => error.message);
-      return res.status(400).json({ 
-        success: false,
-        message: 'Données de compétence invalides',
-        errors: errors
-      });
-    }
-    
-    if (err.code === 11000) {
-      return res.status(409).json({ 
-        success: false,
-        message: 'Une compétence avec ce nom existe déjà' 
-      });
-    }
-    
-    res.status(400).json({ 
+    res.status(500).json({ 
       success: false,
       message: 'Erreur lors de la mise à jour de la compétence',
       error: err.message 
@@ -451,17 +508,20 @@ router.put('/:id', async (req, res) => {
   }
 });
 
-// DELETE /api/v1/skills/:id
+// DELETE /api/v1/skills/:id - Supprimer une compétence
 router.delete('/:id', async (req, res) => {
   try {
-    const skill = await Skill.findByIdAndDelete(req.params.id);
+    const skill = await databases.getDocument(
+      DATABASE_ID,
+      SKILLS_COLLECTION_ID,
+      req.params.id
+    );
     
-    if (!skill) {
-      return res.status(404).json({ 
-        success: false,
-        message: 'Compétence non trouvée' 
-      });
-    }
+    await databases.deleteDocument(
+      DATABASE_ID,
+      SKILLS_COLLECTION_ID,
+      req.params.id
+    );
     
     console.log(`🗑️ Compétence supprimée: ${skill.name}`);
     
@@ -469,11 +529,18 @@ router.delete('/:id', async (req, res) => {
       success: true,
       message: 'Compétence supprimée avec succès',
       deletedSkill: {
-        id: skill._id,
+        id: skill.$id,
         name: skill.name
       }
     });
   } catch (err) {
+    if (err.code === 404) {
+      return res.status(404).json({ 
+        success: false,
+        message: 'Compétence non trouvée' 
+      });
+    }
+    
     console.error('💥 DELETE /api/v1/skills/:id error:', err);
     res.status(500).json({ 
       success: false,
@@ -483,7 +550,7 @@ router.delete('/:id', async (req, res) => {
   }
 });
 
-// POST /api/v1/skills/sync-from-default
+// POST /api/v1/skills/sync-from-default - Synchroniser avec des compétences par défaut
 router.post('/sync-from-default', async (req, res) => {
   try {
     console.log("🔄 POST /api/v1/skills/sync-from-default request");
@@ -509,22 +576,39 @@ router.post('/sync-from-default', async (req, res) => {
 
     for (const skillData of defaultSkills) {
       try {
-        const existingSkill = await Skill.findOne({ 
-          name: { $regex: new RegExp(`^${skillData.name}$`, 'i') } 
-        });
+        // Vérifier si la compétence existe déjà
+        const existingSkills = await databases.listDocuments(
+          DATABASE_ID,
+          SKILLS_COLLECTION_ID,
+          [Query.equal('name', skillData.name)]
+        );
         
-        if (existingSkill) {
-          await Skill.findByIdAndUpdate(existingSkill._id, {
-            ...skillData,
-            updatedAt: new Date()
-          });
+        if (existingSkills.total > 0) {
+          // Mettre à jour la compétence existante
+          await databases.updateDocument(
+            DATABASE_ID,
+            SKILLS_COLLECTION_ID,
+            existingSkills.documents[0].$id,
+            {
+              ...skillData,
+              updatedAt: new Date().toISOString()
+            }
+          );
           results.updated++;
         } else {
-          await Skill.create({
-            ...skillData,
-            memberCount: 0,
-            popularity: 0
-          });
+          // Créer une nouvelle compétence
+          await databases.createDocument(
+            DATABASE_ID,
+            SKILLS_COLLECTION_ID,
+            ID.unique(),
+            {
+              ...skillData,
+              memberCount: 0,
+              popularity: 0,
+              createdAt: new Date().toISOString(),
+              updatedAt: new Date().toISOString()
+            }
+          );
           results.created++;
         }
       } catch (error) {
@@ -552,11 +636,6 @@ router.post('/sync-from-default', async (req, res) => {
 });
 
 // Fonctions utilitaires
-function isValidSortField(sort) {
-  const field = sort.replace(/^-/, '');
-  return SKILLS_CONFIG.sortFields.includes(field);
-}
-
 function categorizeSkill(skillName) {
   const name = skillName.toLowerCase();
   
