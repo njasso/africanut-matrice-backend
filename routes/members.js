@@ -1,4 +1,4 @@
-// routes/members.js - VERSION VÉRIFIÉE ET CORRIGÉE
+// routes/members.js - VERSION OPTIMISÉE POUR MONGO ATLAS
 const express = require("express");
 const mongoose = require("mongoose");
 const Member = require("../models/Member");
@@ -16,51 +16,36 @@ router.param("id", (req, res, next, id) => {
 // ROUTES PRINCIPALES
 // ==========================
 
-// GET tous les membres avec filtres et pagination
+// 🔹 GET tous les membres avec filtres et pagination
 router.get("/", async (req, res) => {
   try {
-    const { 
-      search, 
-      page = 1, 
-      limit = 12,
-      specialty,
-      organization,
-      location,
-      sort = 'name'
-    } = req.query;
+    const { search, page = 1, limit = 12, specialty, organization, location, sort = 'name' } = req.query;
 
-    let query = {};
+    let query = { isActive: true };
 
-    // Filtre de recherche texte
+    // Fonction pour échapper les caractères spéciaux dans regex
+    const escapeRegex = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+    // Filtre texte
     if (search) {
+      const safeSearch = escapeRegex(search);
       query.$or = [
-        { name: { $regex: search, $options: "i" } },
-        { email: { $regex: search, $options: "i" } },
-        { title: { $regex: search, $options: "i" } },
-        { organization: { $regex: search, $options: "i" } },
-        { specialties: { $in: [new RegExp(search, 'i')] } },
-        { skills: { $in: [new RegExp(search, 'i')] } }
+        { name: { $regex: safeSearch, $options: "i" } },
+        { email: { $regex: safeSearch, $options: "i" } },
+        { title: { $regex: safeSearch, $options: "i" } },
+        { organization: { $regex: safeSearch, $options: "i" } },
+        { specialties: { $in: [new RegExp(safeSearch, 'i')] } },
+        { skills: { $in: [new RegExp(safeSearch, 'i')] } }
       ];
     }
 
-    // Filtre par spécialité
-    if (specialty) {
-      query.specialties = { $in: [new RegExp(specialty, 'i')] };
-    }
-
-    // Filtre par organisation
-    if (organization) {
-      query.organization = { $regex: organization, $options: 'i' };
-    }
-
-    // Filtre par localisation
-    if (location) {
-      query.location = { $regex: location, $options: 'i' };
-    }
+    // Filtres optionnels
+    if (specialty) query.specialties = { $in: [new RegExp(escapeRegex(specialty), 'i')] };
+    if (organization) query.organization = { $regex: escapeRegex(organization), $options: 'i' };
+    if (location) query.location = { $regex: escapeRegex(location), $options: 'i' };
 
     const skip = (parseInt(page) - 1) * parseInt(limit);
-    
-    // Exécution de la requête
+
     const members = await Member.find(query)
       .sort({ [sort]: 1 })
       .skip(skip)
@@ -84,181 +69,70 @@ router.get("/", async (req, res) => {
 
   } catch (err) {
     console.error("❌ Erreur GET /members:", err);
-    res.status(500).json({ 
-      success: false, 
-      message: "Erreur serveur lors du chargement des membres",
-      error: err.message 
-    });
+    res.status(500).json({ success: false, message: "Erreur serveur lors du chargement des membres", error: err.message });
   }
 });
 
-// GET un membre par ID
+// 🔹 GET un membre par ID
 router.get("/:id", async (req, res) => {
   try {
     const member = await Member.findById(req.params.id);
-    if (!member) {
-      return res.status(404).json({ 
-        success: false, 
-        message: "Membre non trouvé" 
-      });
-    }
-    
-    res.json({ 
-      success: true, 
-      member 
-    });
+    if (!member) return res.status(404).json({ success: false, message: "Membre non trouvé" });
+    res.json({ success: true, member });
   } catch (err) {
     console.error("❌ Erreur GET /members/:id:", err);
-    res.status(500).json({ 
-      success: false, 
-      message: "Erreur serveur lors de la récupération du membre",
-      error: err.message 
-    });
+    res.status(500).json({ success: false, message: "Erreur serveur lors de la récupération du membre", error: err.message });
   }
 });
 
-// POST créer un membre
+// 🔹 POST créer un membre
 router.post("/", async (req, res) => {
   try {
-    const { 
-      name, 
-      email, 
-      title, 
-      organization, 
-      phone,
-      specialties,
-      skills,
-      location,
-      experienceYears,
-      photo 
-    } = req.body;
+    const { name, email, title, organization, phone, specialties, skills, location, experienceYears, photo } = req.body;
+    if (!name || !email || !title) return res.status(400).json({ success: false, message: "Nom, email et titre sont requis" });
 
-    // Validation des champs requis
-    if (!name || !email || !title) {
-      return res.status(400).json({ 
-        success: false, 
-        message: "Nom, email et titre sont requis" 
-      });
-    }
-
-    // Vérifier si l'email existe déjà
     const existingMember = await Member.findOne({ email });
-    if (existingMember) {
-      return res.status(409).json({
-        success: false,
-        message: "Un membre avec cet email existe déjà"
-      });
-    }
+    if (existingMember) return res.status(409).json({ success: false, message: "Un membre avec cet email existe déjà" });
 
     const member = new Member({ 
-      name, 
-      email, 
-      title, 
-      organization, 
-      phone,
+      name, email, title, organization, phone,
       specialties: Array.isArray(specialties) ? specialties : [],
       skills: Array.isArray(skills) ? skills : [],
-      location,
-      experienceYears: experienceYears || 0,
-      photo 
+      location, experienceYears: experienceYears || 0, photo 
     });
 
     const savedMember = await member.save();
-    
-    res.status(201).json({ 
-      success: true, 
-      message: "Membre créé avec succès", 
-      member: savedMember 
-    });
+    res.status(201).json({ success: true, message: "Membre créé avec succès", member: savedMember });
+
   } catch (err) {
     console.error("❌ Erreur POST /members:", err);
-    
-    if (err.name === 'ValidationError') {
-      return res.status(400).json({
-        success: false,
-        message: "Données de validation invalides",
-        errors: err.errors
-      });
-    }
-    
-    res.status(500).json({ 
-      success: false, 
-      message: "Erreur serveur lors de la création du membre",
-      error: err.message 
-    });
+    if (err.name === 'ValidationError') return res.status(400).json({ success: false, message: "Données invalides", errors: err.errors });
+    res.status(500).json({ success: false, message: "Erreur serveur lors de la création du membre", error: err.message });
   }
 });
 
-// PUT modifier un membre
+// 🔹 PUT modifier un membre
 router.put("/:id", async (req, res) => {
   try {
-    const updatedMember = await Member.findByIdAndUpdate(
-      req.params.id, 
-      req.body, 
-      { 
-        new: true, 
-        runValidators: true 
-      }
-    );
-    
-    if (!updatedMember) {
-      return res.status(404).json({ 
-        success: false, 
-        message: "Membre non trouvé" 
-      });
-    }
-    
-    res.json({ 
-      success: true, 
-      message: "Membre mis à jour avec succès", 
-      member: updatedMember 
-    });
+    const updatedMember = await Member.findByIdAndUpdate(req.params.id, req.body, { new: true, runValidators: true });
+    if (!updatedMember) return res.status(404).json({ success: false, message: "Membre non trouvé" });
+    res.json({ success: true, message: "Membre mis à jour", member: updatedMember });
   } catch (err) {
     console.error("❌ Erreur PUT /members/:id:", err);
-    
-    if (err.name === 'ValidationError') {
-      return res.status(400).json({
-        success: false,
-        message: "Données de validation invalides",
-        errors: err.errors
-      });
-    }
-    
-    res.status(500).json({ 
-      success: false, 
-      message: "Erreur serveur lors de la modification du membre",
-      error: err.message 
-    });
+    if (err.name === 'ValidationError') return res.status(400).json({ success: false, message: "Données invalides", errors: err.errors });
+    res.status(500).json({ success: false, message: "Erreur serveur lors de la modification du membre", error: err.message });
   }
 });
 
-// DELETE supprimer un membre (soft delete)
+// 🔹 DELETE soft delete
 router.delete("/:id", async (req, res) => {
   try {
-    const deletedMember = await Member.findByIdAndUpdate(
-      req.params.id, 
-      { isActive: false }, 
-      { new: true }
-    );
-    
-    if (!deletedMember) {
-      return res.status(404).json({ 
-        success: false, 
-        message: "Membre non trouvé" 
-      });
-    }
-    
-    res.json({ 
-      success: true, 
-      message: "Membre supprimé avec succès" 
-    });
+    const deletedMember = await Member.findByIdAndUpdate(req.params.id, { isActive: false }, { new: true });
+    if (!deletedMember) return res.status(404).json({ success: false, message: "Membre non trouvé" });
+    res.json({ success: true, message: "Membre supprimé avec succès" });
   } catch (err) {
     console.error("❌ Erreur DELETE /members/:id:", err);
-    res.status(500).json({ 
-      success: false, 
-      message: "Erreur serveur lors de la suppression du membre",
-      error: err.message 
-    });
+    res.status(500).json({ success: false, message: "Erreur serveur lors de la suppression du membre", error: err.message });
   }
 });
 
@@ -266,26 +140,27 @@ router.delete("/:id", async (req, res) => {
 // ROUTES SPÉCIALISÉES
 // ==========================
 
-// GET statistiques des membres
+// 🔹 GET statistiques des membres
 router.get("/stats/summary", async (req, res) => {
   try {
-    const totalMembers = await Member.countDocuments();
-    const totalActive = await Member.countDocuments({ isActive: true });
-    
-    // Statistiques par organisation
-    const orgStats = await Member.aggregate([
-      { $match: { organization: { $ne: '', $exists: true } } },
-      { $group: { _id: '$organization', count: { $sum: 1 } } },
-      { $sort: { count: -1 } },
-      { $limit: 10 }
-    ]);
-
-    // Statistiques par spécialité
-    const specialtyStats = await Member.aggregate([
-      { $unwind: '$specialties' },
-      { $group: { _id: '$specialties', count: { $sum: 1 } } },
-      { $sort: { count: -1 } },
-      { $limit: 10 }
+    const [totalMembers, totalActive, orgStats, specialtyStats, junior, intermediate, senior] = await Promise.all([
+      Member.countDocuments(),
+      Member.countDocuments({ isActive: true }),
+      Member.aggregate([
+        { $match: { organization: { $ne: '', $exists: true } } },
+        { $group: { _id: '$organization', count: { $sum: 1 } } },
+        { $sort: { count: -1 } },
+        { $limit: 10 }
+      ]),
+      Member.aggregate([
+        { $unwind: '$specialties' },
+        { $group: { _id: '$specialties', count: { $sum: 1 } } },
+        { $sort: { count: -1 } },
+        { $limit: 10 }
+      ]),
+      Member.countDocuments({ experienceYears: { $lt: 5 } }),
+      Member.countDocuments({ experienceYears: { $gte: 5, $lt: 10 } }),
+      Member.countDocuments({ experienceYears: { $gte: 10 } }),
     ]);
 
     res.json({
@@ -295,37 +170,23 @@ router.get("/stats/summary", async (req, res) => {
         totalActive,
         organizations: orgStats,
         specialties: specialtyStats,
-        experience: {
-          junior: await Member.countDocuments({ experienceYears: { $lt: 5 } }),
-          intermediate: await Member.countDocuments({ experienceYears: { $gte: 5, $lt: 10 } }),
-          senior: await Member.countDocuments({ experienceYears: { $gte: 10 } })
-        }
+        experience: { junior, intermediate, senior }
       }
     });
   } catch (err) {
     console.error("❌ Erreur GET /members/stats/summary:", err);
-    res.status(500).json({ 
-      success: false, 
-      message: "Erreur serveur lors du chargement des statistiques",
-      error: err.message 
-    });
+    res.status(500).json({ success: false, message: "Erreur serveur lors du chargement des statistiques", error: err.message });
   }
 });
 
-// GET métadonnées pour les filtres
+// 🔹 GET métadonnées pour les filtres
 router.get("/metadata/filters", async (req, res) => {
   try {
     const specialties = await Member.distinct('specialties');
     const organizations = await Member.distinct('organization');
     const locations = await Member.distinct('location');
 
-    // Nettoyer et trier les données
-    const cleanData = (arr) => {
-      if (!arr) return [];
-      return arr
-        .filter(item => item && item.trim() !== '')
-        .sort((a, b) => a.localeCompare(b, 'fr', { sensitivity: 'base' }));
-    };
+    const cleanData = (arr) => arr?.filter(i => i && i.trim() !== '').sort((a,b) => a.localeCompare(b,'fr',{sensitivity:'base'})) || [];
 
     res.json({
       success: true,
@@ -337,12 +198,17 @@ router.get("/metadata/filters", async (req, res) => {
     });
   } catch (err) {
     console.error("❌ Erreur GET /members/metadata/filters:", err);
-    res.status(500).json({ 
-      success: false, 
-      message: "Erreur serveur lors du chargement des métadonnées",
-      error: err.message 
-    });
+    res.status(500).json({ success: false, message: "Erreur serveur lors du chargement des métadonnées", error: err.message });
   }
 });
 
 module.exports = router;
+
+/*
+💡 Suggestion pour MongoDB Atlas:
+- Créer des indexes pour accélérer les recherches:
+  MemberSchema.index({ name: 1 });
+  MemberSchema.index({ email: 1 });
+  MemberSchema.index({ specialties: 1 });
+  MemberSchema.index({ organization: 1 });
+*/
