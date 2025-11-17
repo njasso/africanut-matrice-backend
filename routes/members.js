@@ -5,7 +5,7 @@ const router = express.Router();
 
 // Configuration AppWrite
 const APPWRITE_CONFIG = {
-  ENDPOINT: process.env.APPWRITE_ENDPOINT || 'https://fra.cloud.appwrite.io/v1',
+  ENDPOINT: process.env.APPWRITE_ENDPOINT || 'https://cloud.appwrite.io/v1',
   PROJECT_ID: process.env.APPWRITE_PROJECT_ID || '6917d4340008cda26023',
   FUNCTION_ID: process.env.APPWRITE_FUNCTION_ID || '6917e0420005d9ac19c9',
   API_KEY: process.env.APPWRITE_API_KEY
