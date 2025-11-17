@@ -1,3 +1,4 @@
+// functions/get-matrice/src/index.js - VERSION CORRIGÉE
 import { MongoClient } from "mongodb";
 
 export default async function handler({ req, res, log, error }) {
@@ -9,11 +10,10 @@ export default async function handler({ req, res, log, error }) {
   if (!MONGO_URI) {
     const msg = "❌ Variable MONGODB_URI manquante !";
     error(msg);
-    return res.send(JSON.stringify({ 
+    return res.json({ 
       success: false, 
-      message: msg,
-      required: ['MONGODB_URI']
-    }));
+      message: msg
+    });
   }
 
   let client;
@@ -21,49 +21,43 @@ export default async function handler({ req, res, log, error }) {
   try {
     client = new MongoClient(MONGO_URI);
     await client.connect();
-    log(`✅ Connecté à MongoDB Atlas - Base: ${DB_NAME}`);
+    log(`✅ Connecté à MongoDB - Base: ${DB_NAME}`);
 
     const db = client.db(DB_NAME);
     
-    const collections = await db.listCollections().toArray();
-    const collectionNames = collections.map(col => col.name);
+    // Récupérer seulement la collection 'members' pour commencer
+    const membersCollection = db.collection('members');
+    const members = await membersCollection.find({}).toArray();
     
-    const allData = {};
-
-    for (const collectionName of collectionNames) {
-      try {
-        const documents = await db.collection(collectionName).find({}).toArray();
-        const formattedDocuments = documents.map(doc => ({ ...doc, _id: doc._id?.toString() }));
-        allData[collectionName] = formattedDocuments;
-        log(`✅ Collection "${collectionName}" : ${formattedDocuments.length} docs`);
-      } catch (colError) {
-        error(`❌ Erreur collection ${collectionName}: ${colError.message}`);
-        allData[collectionName] = [];
-      }
-    }
+    // Formater les données
+    const formattedMembers = members.map(member => ({
+      ...member,
+      _id: member._id?.toString()
+    }));
 
     await client.close();
-    log("🔒 Connexion MongoDB fermée");
+    log(`✅ ${formattedMembers.length} membres récupérés`);
 
-    const stats = {};
-    Object.keys(allData).forEach(col => stats[col] = allData[col].length);
-
-    // ⚡ Ici on renvoie correctement le JSON pour Appwrite
-    return res.send(JSON.stringify({ 
-      success: true, 
-      data: allData,
-      collections: collectionNames,
-      statistics: stats,
-      totalCollections: collectionNames.length
-    }));
+    // ⚡ IMPORTANT: Retourner le format EXACT attendu par le frontend
+    return res.json({
+      success: true,
+      data: {
+        members: formattedMembers,
+        // Vous pouvez ajouter d'autres collections plus tard
+        projects: [],
+        skills: [],
+        specialties: []
+      },
+      total: formattedMembers.length,
+      message: "Données chargées avec succès"
+    });
 
   } catch (err) {
-    error("❌ Erreur get-matrice : " + err.message);
+    error("❌ Erreur: " + err.message);
     if (client) await client.close();
-    return res.send(JSON.stringify({ 
+    return res.json({ 
       success: false, 
-      error: err.message,
-      stack: process.env.NODE_ENV === 'development' ? err.stack : undefined
-    }));
+      error: err.message
+    });
   }
 }
