@@ -1,298 +1,239 @@
-// services/skillService.js - Service pour gérer les compétences avec Appwrite
-const { databases, ID, Query } = require('node-appwrite');
-const { Skill, SKILL_CONFIG } = require('../models/Skill');
+// models/Skill.js - VERSION APPWRITE/MONGODB ATLAS
+/**
+ * Modèle Skill pour Appwrite avec MongoDB Atlas
+ * 
+ * Note: Dans Appwrite, le schéma est géré par la configuration de la collection
+ * Ce fichier sert de référence pour la structure des documents
+ */
 
-class SkillService {
-  constructor(databaseId, collectionId) {
-    this.databaseId = databaseId;
-    this.collectionId = collectionId;
+class Skill {
+  constructor(data = {}) {
+    this.name = data.name || '';
+    this.category = data.category || 'technique';
+    this.level = data.level || 'intermédiaire';
+    this.description = data.description || '';
+    this.memberCount = data.memberCount || 0;
+    this.popularity = data.popularity || 0;
+    this.createdAt = data.createdAt || new Date().toISOString();
+    this.updatedAt = data.updatedAt || new Date().toISOString();
   }
 
-  // Créer une compétence
-  async create(skillData) {
-    try {
-      // Validation des données
-      const validation = Skill.validate(skillData);
-      if (!validation.isValid) {
-        throw new Error(validation.errors.join(', '));
-      }
+  // Validation des données
+  static validate(skillData) {
+    const errors = [];
 
-      // Créer l'instance Skill
-      const skill = new Skill(skillData);
-      skill.updateTimestamps();
+    // Validation du nom
+    if (!skillData.name || typeof skillData.name !== 'string' || skillData.name.trim().length < 2) {
+      errors.push('Le nom de la compétence est requis et doit contenir au moins 2 caractères');
+    }
 
-      // Préparer les données pour Appwrite
-      const documentData = skill.toAPI();
+    // Validation de la catégorie
+    const validCategories = ['technique', 'management', 'domaine', 'soft', 'langage', 'outil', 'autre', 'design'];
+    if (skillData.category && !validCategories.includes(skillData.category)) {
+      errors.push(`Catégorie invalide. Valeurs acceptées: ${validCategories.join(', ')}`);
+    }
 
-      // Créer le document dans Appwrite
-      const result = await databases.createDocument(
-        this.databaseId,
-        this.collectionId,
-        ID.unique(),
-        documentData
-      );
+    // Validation du niveau
+    const validLevels = ['débutant', 'intermédiaire', 'avancé', 'expert'];
+    if (skillData.level && !validLevels.includes(skillData.level)) {
+      errors.push(`Niveau invalide. Valeurs acceptées: ${validLevels.join(', ')}`);
+    }
 
-      return {
-        success: true,
-        data: result,
-        message: 'Compétence créée avec succès'
-      };
-    } catch (error) {
-      console.error('Erreur création compétence:', error);
-      return {
-        success: false,
-        error: error.message,
-        message: 'Erreur lors de la création de la compétence'
-      };
+    // Validation du memberCount
+    if (skillData.memberCount !== undefined && (isNaN(skillData.memberCount) || skillData.memberCount < 0)) {
+      errors.push('Le nombre de membres doit être un nombre positif');
+    }
+
+    // Validation de la popularité
+    if (skillData.popularity !== undefined && (isNaN(skillData.popularity) || skillData.popularity < 0 || skillData.popularity > 100)) {
+      errors.push('La popularité doit être un nombre entre 0 et 100');
+    }
+
+    return {
+      isValid: errors.length === 0,
+      errors
+    };
+  }
+
+  // Formater les données pour l'API
+  toAPI() {
+    return {
+      name: this.name.trim(),
+      category: this.category,
+      level: this.level,
+      description: this.description.trim(),
+      memberCount: Math.max(0, parseInt(this.memberCount) || 0),
+      popularity: Math.min(100, Math.max(0, parseFloat(this.popularity) || 0)),
+      createdAt: this.createdAt,
+      updatedAt: this.updatedAt
+    };
+  }
+
+  // Mettre à jour les timestamps
+  updateTimestamps() {
+    this.updatedAt = new Date().toISOString();
+    if (!this.createdAt) {
+      this.createdAt = this.updatedAt;
     }
   }
 
-  // Récupérer une compétence par ID
-  async getById(skillId) {
-    try {
-      const skill = await databases.getDocument(
-        this.databaseId,
-        this.collectionId,
-        skillId
-      );
-
-      return {
-        success: true,
-        data: skill
-      };
-    } catch (error) {
-      if (error.code === 404) {
-        return {
-          success: false,
-          error: 'Compétence non trouvée',
-          code: 404
-        };
-      }
-      return {
-        success: false,
-        error: error.message
-      };
+  // Calculer la popularité basée sur le nombre de membres
+  calculatePopularity(totalMembers = 0) {
+    if (totalMembers > 0 && this.memberCount > 0) {
+      this.popularity = (this.memberCount / totalMembers) * 100;
+    } else {
+      this.popularity = 0;
     }
+    return this.popularity;
   }
 
-  // Récupérer les compétences avec filtres
-  async list(filters = {}) {
-    try {
-      const {
-        limit = SKILL_CONFIG.queryConfig.defaultLimit,
-        sort = 'memberCountDesc',
-        category,
-        search
-      } = filters;
+  // Catégoriser automatiquement une compétence basée sur son nom
+  static categorizeByName(skillName) {
+    const name = skillName.toLowerCase();
+    
+    const categories = {
+      langage: ['javascript', 'python', 'java', 'typescript', 'php', 'ruby', 'go', 'c#', 'c++', 'swift', 'html', 'css', 'sql'],
+      technique: ['react', 'angular', 'vue', 'node', 'express', 'django', 'spring', 'docker', 'kubernetes', 'mongodb', 'mysql', 'postgresql'],
+      design: ['ui', 'ux', 'design', 'figma', 'photoshop', 'illustrator', 'sketch'],
+      outil: ['git', 'jenkins', 'vscode', 'postman', 'jira', 'trello', 'slack'],
+      management: ['gestion', 'management', 'leadership', 'projet', 'équipe', 'agile', 'scrum', 'kanban'],
+      soft: ['communication', 'créativité', 'adaptabilité', 'résolution', 'empathie', 'collaboration', 'travail d\'équipe'],
+      domaine: ['finance', 'marketing', 'rh', 'juridique', 'commercial', 'santé', 'éducation']
+    };
 
-      const queries = [];
-
-      // Filtre par catégorie
-      if (category && category !== 'all') {
-        queries.push(Query.equal('category', category));
+    for (const [category, keywords] of Object.entries(categories)) {
+      if (keywords.some(keyword => name.includes(keyword))) {
+        return category;
       }
-
-      // Filtre par recherche
-      if (search) {
-        queries.push(Query.search('name', search));
-      }
-
-      // Tri
-      switch(sort) {
-        case 'name':
-          queries.push(Query.orderAsc('name'));
-          break;
-        case '-name':
-          queries.push(Query.orderDesc('name'));
-          break;
-        case 'memberCount':
-          queries.push(Query.orderAsc('memberCount'));
-          break;
-        case '-memberCount':
-        default:
-          queries.push(Query.orderDesc('memberCount'));
-          break;
-      }
-
-      // Limite
-      const actualLimit = Math.min(parseInt(limit), SKILL_CONFIG.queryConfig.maxLimit);
-      queries.push(Query.limit(actualLimit));
-
-      const response = await databases.listDocuments(
-        this.databaseId,
-        this.collectionId,
-        queries
-      );
-
-      return {
-        success: true,
-        data: response.documents,
-        total: response.total
-      };
-    } catch (error) {
-      console.error('Erreur liste compétences:', error);
-      return {
-        success: false,
-        error: error.message
-      };
     }
+
+    return 'technique';
   }
 
-  // Mettre à jour une compétence
-  async update(skillId, updateData) {
-    try {
-      // Validation partielle des données
-      if (updateData.name) {
-        const nameValidation = Skill.validate({ name: updateData.name });
-        if (!nameValidation.isValid) {
-          throw new Error(nameValidation.errors.join(', '));
-        }
-        updateData.name = Skill.formatName(updateData.name);
-      }
-
-      // Ajouter le timestamp de mise à jour
-      updateData.updatedAt = new Date().toISOString();
-
-      const updatedSkill = await databases.updateDocument(
-        this.databaseId,
-        this.collectionId,
-        skillId,
-        updateData
-      );
-
-      return {
-        success: true,
-        data: updatedSkill,
-        message: 'Compétence mise à jour avec succès'
-      };
-    } catch (error) {
-      if (error.code === 404) {
-        return {
-          success: false,
-          error: 'Compétence non trouvée',
-          code: 404
-        };
-      }
-      return {
-        success: false,
-        error: error.message
-      };
-    }
+  // Formater le nom de la compétence
+  static formatName(name) {
+    return name
+      .toLowerCase()
+      .split(' ')
+      .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+      .join(' ');
   }
 
-  // Supprimer une compétence
-  async delete(skillId) {
-    try {
-      await databases.deleteDocument(
-        this.databaseId,
-        this.collectionId,
-        skillId
-      );
-
-      return {
-        success: true,
-        message: 'Compétence supprimée avec succès'
-      };
-    } catch (error) {
-      if (error.code === 404) {
-        return {
-          success: false,
-          error: 'Compétence non trouvée',
-          code: 404
-        };
-      }
-      return {
-        success: false,
-        error: error.message
-      };
-    }
-  }
-
-  // Synchroniser les compétences avec les membres
-  async syncFromMembers(members) {
-    try {
-      const skillMap = new Map();
-      const results = {
-        created: 0,
-        updated: 0,
-        errors: []
-      };
-
-      // Analyser les compétences des membres
-      members.forEach(member => {
-        if (member.skills && Array.isArray(member.skills)) {
-          member.skills.forEach(skillName => {
-            if (skillName && typeof skillName === 'string' && skillName.trim()) {
-              const name = Skill.formatName(skillName.trim());
-              const key = name.toLowerCase();
-              
-              if (!skillMap.has(key)) {
-                skillMap.set(key, {
-                  name: name,
-                  memberCount: 0,
-                  category: Skill.categorizeByName(name)
-                });
-              }
-              skillMap.get(key).memberCount++;
-            }
-          });
-        }
-      });
-
-      // Récupérer les compétences existantes
-      const existingSkills = await databases.listDocuments(
-        this.databaseId,
-        this.collectionId
-      );
-
-      const existingSkillsMap = new Map();
-      existingSkills.documents.forEach(skill => {
-        existingSkillsMap.set(skill.name.toLowerCase(), skill);
-      });
-
-      // Synchroniser
-      for (const [key, data] of skillMap) {
-        try {
-          if (data.name.length < 2) continue;
-
-          const existingSkill = existingSkillsMap.get(key);
-
-          if (existingSkill) {
-            // Mettre à jour
-            await this.update(existingSkill.$id, {
-              memberCount: data.memberCount,
-              category: data.category,
-              popularity: (data.memberCount / members.length) * 100
-            });
-            results.updated++;
-          } else {
-            // Créer
-            await this.create({
-              name: data.name,
-              category: data.category,
-              memberCount: data.memberCount,
-              popularity: (data.memberCount / members.length) * 100,
-              description: Skill.generateDescription(data.name, data.category)
-            });
-            results.created++;
-          }
-        } catch (error) {
-          results.errors.push(`Erreur avec ${data.name}: ${error.message}`);
-        }
-      }
-
-      return {
-        success: true,
-        stats: results
-      };
-    } catch (error) {
-      console.error('Erreur synchronisation:', error);
-      return {
-        success: false,
-        error: error.message
-      };
-    }
+  // Générer une description automatique
+  static generateDescription(name, category) {
+    const descriptions = {
+      langage: `Langage de programmation ${name}`,
+      technique: `Compétence technique en ${name}`,
+      design: `Compétence en design ${name}`,
+      outil: `Outil ${name} pour le développement`,
+      management: `Compétence en management ${name}`,
+      soft: `Compétence comportementale en ${name}`,
+      domaine: `Compétence métier en ${name}`,
+      autre: `Compétence en ${name}`
+    };
+    
+    return descriptions[category] || `Compétence en ${name}`;
   }
 }
 
-module.exports = SkillService;
+// Configuration pour Appwrite
+const SKILL_CONFIG = {
+  // Structure de la collection dans Appwrite
+  collectionSchema: {
+    attributes: [
+      {
+        key: 'name',
+        type: 'string',
+        size: 255,
+        required: true,
+        array: false
+      },
+      {
+        key: 'category',
+        type: 'string',
+        size: 50,
+        required: true,
+        array: false,
+        default: 'technique'
+      },
+      {
+        key: 'level',
+        type: 'string',
+        size: 50,
+        required: false,
+        array: false,
+        default: 'intermédiaire'
+      },
+      {
+        key: 'description',
+        type: 'string',
+        size: 1000,
+        required: false,
+        array: false,
+        default: ''
+      },
+      {
+        key: 'memberCount',
+        type: 'integer',
+        required: true,
+        array: false,
+        default: 0
+      },
+      {
+        key: 'popularity',
+        type: 'double',
+        required: true,
+        array: false,
+        default: 0.0
+      }
+    ],
+    indexes: [
+      {
+        key: 'name',
+        type: 'key',
+        attributes: ['name'],
+        orders: ['ASC']
+      },
+      {
+        key: 'category',
+        type: 'key',
+        attributes: ['category'],
+        orders: ['ASC']
+      },
+      {
+        key: 'memberCount',
+        type: 'key',
+        attributes: ['memberCount'],
+        orders: ['DESC']
+      },
+      {
+        key: 'popularity',
+        type: 'key',
+        attributes: ['popularity'],
+        orders: ['DESC']
+      }
+    ]
+  },
+
+  // Valeurs par défaut pour les catégories
+  categories: [
+    'technique', 'management', 'domaine', 'soft', 'langage', 'outil', 'autre', 'design'
+  ],
+
+  // Valeurs par défaut pour les niveaux
+  levels: [
+    'débutant', 'intermédiaire', 'avancé', 'expert'
+  ],
+
+  // Configuration des requêtes
+  queryConfig: {
+    defaultLimit: 100,
+    maxLimit: 500,
+    sortFields: ['name', 'memberCount', 'popularity', 'category', 'createdAt', 'updatedAt']
+  }
+};
+
+module.exports = {
+  Skill,
+  SKILL_CONFIG
+};
