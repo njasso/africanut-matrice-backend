@@ -15,32 +15,36 @@ export default async function handler({ req, res, log }) {
       useNewUrlParser: true,
       useUnifiedTopology: true,
     });
+
     await client.connect();
     const db = client.db(DB_NAME);
 
-    // Liste toutes les collections de la base
+    // Liste toutes les collections
     const collections = await db.listCollections().toArray();
 
     const data = {};
 
     for (const col of collections) {
-      // Récupère tous les documents de chaque collection
       const docs = await db.collection(col.name).find({}).toArray();
       data[col.name] = docs;
-    }
-
-    // Envoi des données JSON
-    if (res && res.json) {
-      res.json({ success: true, data });
-    } else {
-      log({ success: true, data });
+      log(`📂 Collection "${col.name}" récupérée (${docs.length} documents)`);
     }
 
     await client.close();
+
+    // Retourne les données JSON à Appwrite
+    if (res && res.json) {
+      return res.json({ success: true, data });
+    } else {
+      log({ success: true, data });
+      return context.res.empty();
+    }
   } catch (err) {
     log("❌ Erreur dans la fonction Appwrite :", err.message);
     if (res && res.status) {
-      res.status(500).json({ success: false, error: err.message });
+      return res.status(500).json({ success: false, error: err.message });
+    } else {
+      return context.res.empty();
     }
   }
 }
