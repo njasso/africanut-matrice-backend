@@ -259,9 +259,6 @@ async function callAppWriteFunction() {
     
     const appwriteUrl = `${APPWRITE_CONFIG.ENDPOINT}/functions/${APPWRITE_CONFIG.FUNCTION_ID}/executions`;
     
-    console.log("📍 URL AppWrite:", appwriteUrl);
-    console.log("🔑 Project ID:", APPWRITE_CONFIG.PROJECT_ID);
-
     const requestConfig = {
       headers: {
         'Content-Type': 'application/json',
@@ -270,7 +267,6 @@ async function callAppWriteFunction() {
       timeout: 25000
     };
 
-    // Ajout de l'API Key si disponible
     if (APPWRITE_CONFIG.API_KEY) {
       requestConfig.headers['X-Appwrite-Key'] = APPWRITE_CONFIG.API_KEY;
     }
@@ -279,37 +275,25 @@ async function callAppWriteFunction() {
 
     console.log("✅ Réponse AppWrite Frankfurt - Status:", response.status);
 
-    // Gestion de la réponse AppWrite
-    if (response.data && response.data.response) {
-      try {
-        const responseBody = typeof response.data.response === 'string' 
-          ? JSON.parse(response.data.response) 
-          : response.data.response;
-
-        console.log("📦 Structure réponse:", {
-          success: responseBody.success,
-          dataKeys: responseBody.data ? Object.keys(responseBody.data) : 'no data',
-          membersCount: responseBody.data?.members?.length || 0
-        });
-
-        return responseBody;
-
-      } catch (parseError) {
-        console.error("❌ Erreur parsing JSON:", parseError);
-        return {
-          success: false,
-          message: "Erreur de format JSON dans la réponse",
-          error: parseError.message
-        };
-      }
+    // 🔹 Compatibilité avec ton format actuel
+    let responseBody;
+    if (response.data.response) {
+      // ancien format AppWrite
+      responseBody = typeof response.data.response === 'string' 
+        ? JSON.parse(response.data.response) 
+        : response.data.response;
     } else {
-      console.error("❌ Réponse AppWrite invalide - Structure:", response.data);
-      return {
-        success: false,
-        message: "Réponse invalide d'AppWrite",
-        responseData: response.data
-      };
+      // nouveau format get-matrice
+      responseBody = response.data;
     }
+
+    console.log("📦 Structure réponse:", {
+      success: responseBody.success,
+      dataKeys: responseBody.data ? Object.keys(responseBody.data) : 'no data',
+      membersCount: responseBody.data?.members?.length || 0
+    });
+
+    return responseBody;
 
   } catch (err) {
     console.error("❌ Erreur appel AppWrite Frankfurt:", {
@@ -318,15 +302,6 @@ async function callAppWriteFunction() {
       status: err.response?.status,
       statusText: err.response?.statusText
     });
-
-    // Détails supplémentaires pour le debugging
-    if (err.response) {
-      console.error("📋 Détails erreur:", {
-        status: err.response.status,
-        headers: err.response.headers,
-        data: err.response.data
-      });
-    }
 
     return {
       success: false,
@@ -337,6 +312,7 @@ async function callAppWriteFunction() {
     };
   }
 }
+
 
 // 🔹 Fonction de filtrage
 function filterMembers(members, filters) {
