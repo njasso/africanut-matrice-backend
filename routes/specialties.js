@@ -1,452 +1,242 @@
-// routes/specialties.js - VERSION CORRIGÉE
-const express = require('express');
-const router = express.Router();
-const Specialty = require('../models/Specialty');
-const Member = require('../models/Member');
+// models/Member.js - VERSION REFACTORED & OPTIMISÉE
+const mongoose = require("mongoose");
+const uniqueValidator = require("mongoose-unique-validator");
 
-// GET /api/v1/specialties - Récupérer toutes les spécialités avec statistiques
-router.get('/', async (req, res) => {
-  try {
-    const specialties = await Specialty.find({ isActive: true }).sort({ memberCount: -1 });
-    
-    // Calculer les statistiques globales
-    const totalMembers = await Member.countDocuments({ isActive: true });
-    
-    // Mettre à jour les popularités
-    const updatedSpecialties = await Promise.all(
-      specialties.map(async (specialty) => {
-        if (totalMembers > 0) {
-          specialty.popularity = (specialty.memberCount / totalMembers) * 100;
-          await specialty.save();
-        }
-        return specialty;
-      })
-    );
-
-    res.json({
-      success: true,
-      data: updatedSpecialties,
-      count: updatedSpecialties.length,
-      stats: {
-        totalSpecialties: updatedSpecialties.length,
-        totalMembers: totalMembers,
-        avgMembersPerSpecialty: totalMembers > 0 ? (totalMembers / updatedSpecialties.length).toFixed(2) : 0
-      }
-    });
-  } catch (err) {
-    console.error('❌ Erreur GET /specialties:', err);
-    res.status(500).json({ 
-      success: false,
-      message: 'Erreur serveur lors de la récupération des spécialités',
-      error: err.message 
-    });
-  }
-});
-
-// GET /api/v1/specialties/with-members - Récupérer spécialités avec membres associés
-router.get('/with-members', async (req, res) => {
-  try {
-    const specialties = await Specialty.find({ isActive: true }).sort({ memberCount: -1 });
-    const totalMembers = await Member.countDocuments({ isActive: true });
-
-    // Pour chaque spécialité, récupérer les membres associés
-    const specialtiesWithMembers = await Promise.all(
-      specialties.map(async (specialty) => {
-        const members = await Member.find({ 
-          specialties: { $regex: new RegExp(specialty.name, 'i') },
-          isActive: true 
-        }).select('name title email organization');
-        
-        // Mettre à jour la popularité
-        if (totalMembers > 0) {
-          specialty.popularity = (members.length / totalMembers) * 100;
-          await specialty.save();
-        }
-
-        return {
-          ...specialty.toObject(),
-          members: members,
-          memberCount: members.length
-        };
-      })
-    );
-
-    res.json({
-      success: true,
-      data: specialtiesWithMembers,
-      count: specialtiesWithMembers.length
-    });
-  } catch (err) {
-    console.error('❌ Erreur GET /specialties/with-members:', err);
-    res.status(500).json({ 
-      success: false,
-      message: err.message 
-    });
-  }
-});
-
-// GET /api/v1/specialties/:id - Récupérer une spécialité par ID avec membres
-router.get('/:id', async (req, res) => {
-  try {
-    const specialty = await Specialty.findById(req.params.id);
-    if (!specialty) {
-      return res.status(404).json({ 
-        success: false,
-        message: 'Spécialité non trouvée' 
-      });
+const memberSchema = new mongoose.Schema({
+  name: {
+    type: String,
+    required: [true, "Le nom est requis"],
+    trim: true,
+    minlength: [2, "Le nom doit contenir au moins 2 caractères"],
+    maxlength: [100, "Le nom ne peut pas dépasser 100 caractères"]
+  },
+  title: {
+    type: String,
+    required: [true, "Le titre est requis"],
+    trim: true,
+    maxlength: [200, "Le titre ne peut pas dépasser 200 caractères"]
+  },
+  email: {
+    type: String,
+    required: [true, "L'email est requis"],
+    unique: true,
+    trim: true,
+    lowercase: true,
+    match: [/^\w+([.-]?\w+)*@\w+([.-]?\w+)*(\.\w{2,3})+$/, "Veuillez fournir un email valide"]
+  },
+  phone: {
+    type: String,
+    trim: true,
+    match: [/^[\+]?[0-9\s\-\(\)]{10,}$/, "Numéro de téléphone invalide"]
+  },
+  specialties: {
+    type: [String],
+    default: [],
+    validate: {
+      validator: array => array.length <= 20,
+      message: "Maximum 20 spécialités autorisées"
     }
-
-    // Récupérer les membres ayant cette spécialité
-    const members = await Member.find({ 
-      specialties: { $regex: new RegExp(specialty.name, 'i') },
-      isActive: true 
-    });
-
-    res.json({
-      success: true,
-      data: {
-        ...specialty.toObject(),
-        members: members,
-        memberCount: members.length
-      }
-    });
-  } catch (err) {
-    console.error(`❌ Erreur GET /specialties/${req.params.id}:`, err);
-    res.status(500).json({ 
-      success: false,
-      message: err.message 
-    });
+  },
+  skills: {
+    type: [String],
+    default: [],
+    validate: {
+      validator: array => array.length <= 30,
+      message: "Maximum 30 compétences autorisées"
+    }
+  },
+  location: {
+    type: String,
+    trim: true,
+    maxlength: [100, "La localisation ne peut pas dépasser 100 caractères"]
+  },
+  organization: {
+    type: String,
+    trim: true,
+    maxlength: [100, "L'organisation ne peut pas dépasser 100 caractères"]
+  },
+  entreprise: {
+    type: String,
+    trim: true,
+    maxlength: [100, "Le nom de l'entreprise ne peut pas dépasser 100 caractères"]
+  },
+  experienceYears: {
+    type: Number,
+    default: 0,
+    min: [0, "L'expérience ne peut pas être négative"],
+    max: [60, "L'expérience ne peut pas dépasser 60 ans"]
+  },
+  projects: {
+    type: String,
+    default: "",
+    maxlength: [1000, "La description des projets ne peut pas dépasser 1000 caractères"]
+  },
+  availability: {
+    type: String,
+    default: "",
+    maxlength: [200, "La disponibilité ne peut pas dépasser 200 caractères"]
+  },
+  statutMembre: {
+    type: String,
+    enum: ["Actif", "Inactif", "En attente"],
+    default: "Actif"
+  },
+  photo: {
+    type: String,
+    default: "",
+    match: [/^https?:\/\/.+\..+/, "L'URL de la photo doit être valide"]
+  },
+  cvLink: {
+    type: String,
+    default: "",
+    match: [/^https?:\/\/.+\..+/, "L'URL du CV doit être valide"]
+  },
+  linkedin: {
+    type: String,
+    default: "",
+    match: [/^https?:\/\/.+\..+/, "L'URL LinkedIn doit être valide"]
+  },
+  isActive: {
+    type: Boolean,
+    default: true
+  },
+  importedAt: {
+    type: Date,
+    default: Date.now
   }
+}, { 
+  timestamps: true,
+  toJSON: { virtuals: true },
+  toObject: { virtuals: true }
 });
 
-// POST /api/v1/specialties - Créer une nouvelle spécialité
-router.post('/', async (req, res) => {
-  try {
-    const { name, category, description, level } = req.body;
-    
-    // Vérifier si la spécialité existe déjà
-    const existingSpecialty = await Specialty.findOne({ 
-      name: { $regex: new RegExp(`^${name}$`, 'i') } 
-    });
-    
-    if (existingSpecialty) {
-      return res.status(400).json({
-        success: false,
-        message: 'Cette spécialité existe déjà'
-      });
-    }
+// 🔹 Plugins
+memberSchema.plugin(uniqueValidator, { message: "Erreur, {PATH} doit être unique." });
 
-    // Déterminer la catégorie automatiquement si non fournie
-    const finalCategory = category || categorizeSpecialty(name);
+// 🔹 Index texte pour recherche globale
+memberSchema.index({ name: 'text', title: 'text', organization: 'text', specialties: 'text', skills: 'text' });
+memberSchema.index({ email: 1 });
+memberSchema.index({ isActive: 1 });
 
-    const specialty = new Specialty({
-      name: name.trim(),
-      category: finalCategory,
-      description: description || '',
-      level: level || 'intermédiaire',
-      memberCount: 0,
-      popularity: 0
-    });
-
-    await specialty.save();
-
-    res.status(201).json({
-      success: true,
-      message: 'Spécialité créée avec succès',
-      data: specialty
-    });
-  } catch (err) {
-    console.error('❌ Erreur POST /specialties:', err);
-    res.status(400).json({ 
-      success: false,
-      message: err.message 
-    });
-  }
+// 🔹 Virtual pour l'expérience en catégories
+memberSchema.virtual('experienceLevel').get(function() {
+  if (this.experienceYears < 2) return "Débutant";
+  if (this.experienceYears < 5) return "Intermédiaire";
+  if (this.experienceYears < 10) return "Confirmé";
+  return "Expert";
 });
 
-// PUT /api/v1/specialties/:id - Mettre à jour une spécialité
-router.put('/:id', async (req, res) => {
-  try {
-    const specialty = await Specialty.findByIdAndUpdate(
-      req.params.id,
-      req.body,
-      { new: true, runValidators: true }
-    );
-    
-    if (!specialty) {
-      return res.status(404).json({ 
-        success: false,
-        message: 'Spécialité non trouvée' 
-      });
-    }
-
-    res.json({
-      success: true,
-      message: 'Spécialité mise à jour avec succès',
-      data: specialty
-    });
-  } catch (err) {
-    console.error(`❌ Erreur PUT /specialties/${req.params.id}:`, err);
-    res.status(400).json({ 
-      success: false,
-      message: err.message 
-    });
-  }
-});
-
-// DELETE /api/v1/specialties/:id - Supprimer une spécialité (soft delete)
-router.delete('/:id', async (req, res) => {
-  try {
-    const specialty = await Specialty.findByIdAndUpdate(
-      req.params.id,
-      { isActive: false },
-      { new: true }
-    );
-    
-    if (!specialty) {
-      return res.status(404).json({ 
-        success: false,
-        message: 'Spécialité non trouvée' 
-      });
-    }
-
-    res.json({
-      success: true,
-      message: 'Spécialité supprimée avec succès'
-    });
-  } catch (err) {
-    console.error(`❌ Erreur DELETE /specialties/${req.params.id}:`, err);
-    res.status(500).json({ 
-      success: false,
-      message: err.message 
-    });
-  }
-});
-
-// POST /api/v1/specialties/sync - Synchroniser les spécialités avec les membres (IMPORTANT)
-router.post('/sync', async (req, res) => {
-  try {
-    console.log('🔄 Démarrage synchronisation spécialités...');
-    
-    const members = await Member.find({ isActive: true });
-    const specialtyMap = new Map();
-    const totalMembers = members.length;
-
-    console.log(`📊 Analyse de ${totalMembers} membres...`);
-
-    // Extraire les spécialités des membres
-    members.forEach(member => {
-      if (member.specialties && Array.isArray(member.specialties)) {
-        member.specialties.forEach(specialtyName => {
-          if (specialtyName && typeof specialtyName === 'string' && specialtyName.trim()) {
-            const name = specialtyName.trim();
-            
-            if (!specialtyMap.has(name)) {
-              specialtyMap.set(name, {
-                name: name,
-                memberCount: 0,
-                category: categorizeSpecialty(name),
-                members: []
-              });
-            }
-            
-            const specialtyData = specialtyMap.get(name);
-            specialtyData.memberCount++;
-            specialtyData.members.push(member._id);
-          }
-        });
-      }
-    });
-
-    console.log(`🎯 ${specialtyMap.size} spécialités trouvées dans les membres`);
-
-    // Synchroniser avec la base de données
-    const syncResults = [];
-    
-    for (const [name, data] of specialtyMap) {
-      try {
-        const popularity = totalMembers > 0 ? (data.memberCount / totalMembers) * 100 : 0;
-        
-        const specialty = await Specialty.findOneAndUpdate(
-          { name: { $regex: new RegExp(`^${name}$`, 'i') } },
-          {
-            name: data.name,
-            category: data.category,
-            memberCount: data.memberCount,
-            popularity: popularity,
-            isActive: true,
-            updatedAt: new Date()
-          },
-          { 
-            upsert: true, 
-            new: true,
-            setDefaultsOnInsert: true 
-          }
-        );
-
-        syncResults.push({
-          name: specialty.name,
-          action: specialty.isNew ? 'CREATED' : 'UPDATED',
-          memberCount: specialty.memberCount,
-          popularity: specialty.popularity
-        });
-
-        console.log(`✅ ${specialty.isNew ? 'Créé' : 'Mis à jour'}: ${specialty.name} (${specialty.memberCount} membres)`);
-      } catch (error) {
-        console.error(`❌ Erreur sync spécialité ${name}:`, error);
-        syncResults.push({
-          name: name,
-          action: 'ERROR',
-          error: error.message
-        });
-      }
-    }
-
-    // Désactiver les spécialités orphelines (aucun membre)
-    const usedSpecialtyNames = Array.from(specialtyMap.keys());
-    const deactivateResult = await Specialty.updateMany(
-      { 
-        name: { $nin: usedSpecialtyNames.map(s => new RegExp(`^${s}$`, 'i')) },
-        isActive: true
-      },
-      { 
-        isActive: false,
-        memberCount: 0,
-        popularity: 0,
-        updatedAt: new Date()
-      }
-    );
-
-    console.log(`🗑️ ${deactivateResult.modifiedCount} spécialités orphelines désactivées`);
-
-    const finalSpecialties = await Specialty.find({ isActive: true }).sort({ memberCount: -1 });
-
-    res.json({
-      success: true,
-      message: `Synchronisation terminée: ${finalSpecialties.length} spécialités actives`,
-      stats: {
-        totalSpecialties: finalSpecialties.length,
-        totalMembers: totalMembers,
-        specialtiesCreated: syncResults.filter(r => r.action === 'CREATED').length,
-        specialtiesUpdated: syncResults.filter(r => r.action === 'UPDATED').length,
-        specialtiesDeactivated: deactivateResult.modifiedCount
-      },
-      data: finalSpecialties,
-      details: syncResults
-    });
-
-  } catch (err) {
-    console.error('❌ Erreur synchronisation spécialités:', err);
-    res.status(500).json({ 
-      success: false,
-      message: 'Erreur lors de la synchronisation',
-      error: err.message 
-    });
-  }
-});
-
-// POST /api/v1/specialties/assign-random - Assigner aléatoirement des spécialités aux membres
-router.post('/assign-random', async (req, res) => {
-  try {
-    const members = await Member.find({ isActive: true });
-    const specialties = await Specialty.find({ isActive: true });
-    
-    let assignedCount = 0;
-
-    for (const member of members) {
-      // Assigner 1-3 spécialités aléatoires
-      const randomCount = Math.floor(Math.random() * 3) + 1;
-      const shuffled = [...specialties].sort(() => 0.5 - Math.random());
-      const randomSpecialties = shuffled.slice(0, randomCount);
-      
-      // Stocker les noms des spécialités (comme dans le modèle Member actuel)
-      member.specialties = randomSpecialties.map(spec => spec.name);
-      await member.save();
-      assignedCount++;
-    }
-
-    // Synchroniser les compteurs après assignation
-    await syncSpecialtiesCounters();
-
-    res.json({
-      success: true,
-      message: `Spécialités assignées à ${assignedCount} membres`,
-      assignedCount: assignedCount
-    });
-
-  } catch (err) {
-    console.error('❌ Erreur assignation aléatoire:', err);
-    res.status(500).json({ 
-      success: false,
-      message: err.message 
-    });
-  }
-});
-
-// Fonction utilitaire pour synchroniser les compteurs
-async function syncSpecialtiesCounters() {
-  try {
-    const specialties = await Specialty.find({ isActive: true });
-    
-    for (const specialty of specialties) {
-      const memberCount = await Member.countDocuments({
-        specialties: { $regex: new RegExp(specialty.name, 'i') },
-        isActive: true
-      });
-      
-      specialty.memberCount = memberCount;
-      await specialty.save();
-    }
-    
-    console.log('✅ Compteurs de spécialités synchronisés');
-  } catch (error) {
-    console.error('❌ Erreur synchronisation compteurs:', error);
-  }
-}
-
-// Fonction de catégorisation automatique
-function categorizeSpecialty(specialtyName) {
-  const name = specialtyName.toLowerCase();
-  
-  const categories = {
-    technique: [
-      'technique', 'ingénieur', 'technolog', 'informatique', 'digital', 'software', 
-      'hardware', 'code', 'programmation', 'développement', 'coding', 'algorithm', 
-      'data', 'ai', 'intelligence artificielle', 'robotique', 'automatisation',
-      'hydraulique', 'génie', 'civil', 'mécanique', 'électrique', 'construction', 'ingénierie'
-    ],
-    management: [
-      'gestion', 'management', 'leadership', 'projet', 'équipe', 'qualité', 
-      'sécurité', 'admin', 'coordination', 'supervision', 'stratégie', 
-      'planification', 'organisation', 'direction'
-    ],
-    industrie: [
-      'industrie', 'production', 'manufactur', 'usine', 'fabrication', 'process', 
-      'opération', 'maintenance', 'industriel', 'production', 'manufacturing',
-      'usinage', 'assemblage', 'agro', 'logistique'
-    ],
-    recherche: [
-      'recherche', 'développement', 'r&d', 'innovation', 'scientifique', 'étude', 
-      'analyse', 'laboratoire', 'expérimentation', 'science', 'académique', 
-      'publication', 'thèse', 'doctorat', 'biotechnologie'
-    ],
-    environnement: [
-      'environnement', 'écolog', 'durable', 'climat', 'biodiversité', 'conservation', 
-      'nature', 'écologique', 'green', 'sustainable', 'écologie', 'carbone'
-    ],
-    energie: [
-      'énergie', 'solaire', 'éolien', 'hydraulique', 'renouvelable', 'nucléaire', 
-      'thermique', 'électricité', 'power', 'grid', 'smart grid'
-    ]
+// 🔹 Méthode d'instance pour le profil complet
+memberSchema.methods.getProfile = function() {
+  return {
+    id: this._id,
+    name: this.name,
+    title: this.title,
+    email: this.email,
+    phone: this.phone,
+    specialties: this.specialties,
+    skills: this.skills,
+    location: this.location,
+    organization: this.organization,
+    entreprise: this.entreprise,
+    experienceYears: this.experienceYears,
+    experienceLevel: this.experienceLevel,
+    projects: this.projects,
+    availability: this.availability,
+    statutMembre: this.statutMembre,
+    photo: this.photo,
+    cvLink: this.cvLink,
+    linkedin: this.linkedin,
+    isActive: this.isActive,
+    createdAt: this.createdAt,
+    updatedAt: this.updatedAt
   };
+};
 
-  for (const [category, keywords] of Object.entries(categories)) {
-    if (keywords.some(keyword => name.includes(keyword))) {
-      return category;
-    }
+// 🔹 Méthode statique pour recherches avancées avec pagination et filtre
+memberSchema.statics.searchMembers = function(filters = {}) {
+  const {
+    search,
+    specialties,
+    organization,
+    location,
+    minExperience,
+    maxExperience,
+    page = 1,
+    limit = 12,
+    sort = 'name'
+  } = filters;
+
+  const MAX_LIMIT = 50;
+  const realLimit = Math.min(limit, MAX_LIMIT);
+  const skip = (page - 1) * realLimit;
+
+  let query = { isActive: true };
+
+  // Recherche texte
+  if (search) {
+    query.$text = { $search: search };
   }
 
-  return 'autre';
-}
+  // Filtres spécifiques
+  if (specialties) query.specialties = { $in: Array.isArray(specialties) ? specialties : [specialties] };
+  if (organization) query.organization = { $regex: organization, $options: 'i' };
+  if (location) query.location = { $regex: location, $options: 'i' };
 
-module.exports = router;
+  // Filtre expérience
+  const expFilter = {};
+  if (minExperience != null) expFilter.$gte = minExperience;
+  if (maxExperience != null) expFilter.$lte = maxExperience;
+  if (Object.keys(expFilter).length) query.experienceYears = expFilter;
+
+  let sortObj = sort === 'relevance' && search ? { score: { $meta: "textScore" } } : { [sort]: 1 };
+
+  return this.find(query, search ? { score: { $meta: "textScore" } } : {})
+             .sort(sortObj)
+             .skip(skip)
+             .limit(realLimit);
+};
+
+// 🔹 Méthode statique pour compter les membres filtrés (utile pour pagination)
+memberSchema.statics.countMembers = function(filters = {}) {
+  const {
+    search,
+    specialties,
+    organization,
+    location,
+    minExperience,
+    maxExperience
+  } = filters;
+
+  let query = { isActive: true };
+
+  if (search) query.$text = { $search: search };
+  if (specialties) query.specialties = { $in: Array.isArray(specialties) ? specialties : [specialties] };
+  if (organization) query.organization = { $regex: organization, $options: 'i' };
+  if (location) query.location = { $regex: location, $options: 'i' };
+
+  const expFilter = {};
+  if (minExperience != null) expFilter.$gte = minExperience;
+  if (maxExperience != null) expFilter.$lte = maxExperience;
+  if (Object.keys(expFilter).length) query.experienceYears = expFilter;
+
+  return this.countDocuments(query);
+};
+
+// 🔹 Middleware pre-save pour nettoyage et normalisation
+memberSchema.pre('save', function(next) {
+  // Nettoyer tableaux
+  if (this.specialties) this.specialties = this.specialties.map(s => s.trim()).filter(s => s);
+  if (this.skills) this.skills = this.skills.map(s => s.trim()).filter(s => s);
+
+  // Capitaliser le nom
+  if (this.name) this.name = this.name.split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()).join(' ');
+
+  // Normaliser title et organization
+  if (this.title) this.title = this.title.trim();
+  if (this.organization) this.organization = this.organization.trim();
+
+  next();
+});
+
+module.exports = mongoose.model("Member", memberSchema);
