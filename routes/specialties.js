@@ -1,81 +1,120 @@
-// routes/specialties.js
+// routes/specialties.js - VERSION CORRIGÉE
 const express = require('express');
 const router = express.Router();
-const { Client, Databases, ID, Query } = require('node-appwrite');
+const Specialty = require('../models/Specialty');
+const Member = require('../models/Member');
 
-// Configuration AppWrite avec VOTRE ENDPOINT
-const APPWRITE_CONFIG = {
-  ENDPOINT: process.env.APPWRITE_ENDPOINT || 'https://fra.cloud.appwrite.io/v1',
-  PROJECT_ID: process.env.APPWRITE_PROJECT_ID || '6917d4340008cda26023',
-  FUNCTION_ID: process.env.APPWRITE_FUNCTION_ID || '6917e0420005d9ac19c9',
-  API_KEY: process.env.APPWRITE_API_KEY
-};
-
-// Initialisation du client AppWrite
-const client = new Client()
-  .setEndpoint(APPWRITE_CONFIG.ENDPOINT)
-  .setProject(APPWRITE_CONFIG.PROJECT_ID)
-  .setKey(APPWRITE_CONFIG.API_KEY);
-
-const databases = new Databases(client);
-
-// ID de la base de données et collection (à adapter selon votre configuration)
-const DATABASE_ID = 'matrice'; // Remplacez par votre ID de base de données
-const SPECIALTIES_COLLECTION_ID = 'specialties'; // Collection pour les spécialités
-const MEMBERS_COLLECTION_ID = 'members'; // Collection pour les membres
-
-// GET /api/v1/specialties - Récupérer toutes les spécialités
+// GET /api/v1/specialties - Récupérer toutes les spécialités avec statistiques
 router.get('/', async (req, res) => {
   try {
-    const response = await databases.listDocuments(
-      DATABASE_ID,
-      SPECIALTIES_COLLECTION_ID,
-      [
-        Query.orderDesc('memberCount'),
-        Query.limit(100)
-      ]
+    const specialties = await Specialty.find({ isActive: true }).sort({ memberCount: -1 });
+    
+    // Calculer les statistiques globales
+    const totalMembers = await Member.countDocuments({ isActive: true });
+    
+    // Mettre à jour les popularités
+    const updatedSpecialties = await Promise.all(
+      specialties.map(async (specialty) => {
+        if (totalMembers > 0) {
+          specialty.popularity = (specialty.memberCount / totalMembers) * 100;
+          await specialty.save();
+        }
+        return specialty;
+      })
     );
 
     res.json({
       success: true,
-      data: response.documents,
-      total: response.total
+      data: updatedSpecialties,
+      count: updatedSpecialties.length,
+      stats: {
+        totalSpecialties: updatedSpecialties.length,
+        totalMembers: totalMembers,
+        avgMembersPerSpecialty: totalMembers > 0 ? (totalMembers / updatedSpecialties.length).toFixed(2) : 0
+      }
     });
   } catch (err) {
-    console.error('Erreur récupération spécialités:', err);
+    console.error('❌ Erreur GET /specialties:', err);
     res.status(500).json({ 
       success: false,
-      message: 'Erreur de récupération des spécialités',
+      message: 'Erreur serveur lors de la récupération des spécialités',
       error: err.message 
     });
   }
 });
 
-// GET /api/v1/specialties/:id - Récupérer une spécialité par ID
-router.get('/:id', async (req, res) => {
+// GET /api/v1/specialties/with-members - Récupérer spécialités avec membres associés
+router.get('/with-members', async (req, res) => {
   try {
-    const specialty = await databases.getDocument(
-      DATABASE_ID,
-      SPECIALTIES_COLLECTION_ID,
-      req.params.id
+    const specialties = await Specialty.find({ isActive: true }).sort({ memberCount: -1 });
+    const totalMembers = await Member.countDocuments({ isActive: true });
+
+    // Pour chaque spécialité, récupérer les membres associés
+    const specialtiesWithMembers = await Promise.all(
+      specialties.map(async (specialty) => {
+        const members = await Member.find({ 
+          specialties: { $regex: new RegExp(specialty.name, 'i') },
+          isActive: true 
+        }).select('name title email organization');
+        
+        // Mettre à jour la popularité
+        if (totalMembers > 0) {
+          specialty.popularity = (members.length / totalMembers) * 100;
+          await specialty.save();
+        }
+
+        return {
+          ...specialty.toObject(),
+          members: members,
+          memberCount: members.length
+        };
+      })
     );
 
     res.json({
       success: true,
-      data: specialty
+      data: specialtiesWithMembers,
+      count: specialtiesWithMembers.length
     });
   } catch (err) {
-    console.error('Erreur récupération spécialité:', err);
-    if (err.code === 404) {
+    console.error('❌ Erreur GET /specialties/with-members:', err);
+    res.status(500).json({ 
+      success: false,
+      message: err.message 
+    });
+  }
+});
+
+// GET /api/v1/specialties/:id - Récupérer une spécialité par ID avec membres
+router.get('/:id', async (req, res) => {
+  try {
+    const specialty = await Specialty.findById(req.params.id);
+    if (!specialty) {
       return res.status(404).json({ 
         success: false,
         message: 'Spécialité non trouvée' 
       });
     }
+
+    // Récupérer les membres ayant cette spécialité
+    const members = await Member.find({ 
+      specialties: { $regex: new RegExp(specialty.name, 'i') },
+      isActive: true 
+    });
+
+    res.json({
+      success: true,
+      data: {
+        ...specialty.toObject(),
+        members: members,
+        memberCount: members.length
+      }
+    });
+  } catch (err) {
+    console.error(`❌ Erreur GET /specialties/${req.params.id}:`, err);
     res.status(500).json({ 
       success: false,
-      message: 'Erreur de récupération de la spécialité',
-      error: err.message 
+      message: err.message 
     });
   }
 });
@@ -83,59 +122,44 @@ router.get('/:id', async (req, res) => {
 // POST /api/v1/specialties - Créer une nouvelle spécialité
 router.post('/', async (req, res) => {
   try {
-    const { name, category, description } = req.body;
-
-    if (!name || !name.trim()) {
+    const { name, category, description, level } = req.body;
+    
+    // Vérifier si la spécialité existe déjà
+    const existingSpecialty = await Specialty.findOne({ 
+      name: { $regex: new RegExp(`^${name}$`, 'i') } 
+    });
+    
+    if (existingSpecialty) {
       return res.status(400).json({
         success: false,
-        message: 'Le nom de la spécialité est requis'
+        message: 'Cette spécialité existe déjà'
       });
     }
 
-    // Vérifier si la spécialité existe déjà
-    const existingSpecialties = await databases.listDocuments(
-      DATABASE_ID,
-      SPECIALTIES_COLLECTION_ID,
-      [
-        Query.equal('name', name.trim())
-      ]
-    );
+    // Déterminer la catégorie automatiquement si non fournie
+    const finalCategory = category || categorizeSpecialty(name);
 
-    if (existingSpecialties.total > 0) {
-      return res.status(400).json({ 
-        success: false,
-        message: 'Cette spécialité existe déjà' 
-      });
-    }
-
-    const specialtyData = {
+    const specialty = new Specialty({
       name: name.trim(),
-      category: category || categorizeSpecialty(name),
+      category: finalCategory,
       description: description || '',
+      level: level || 'intermédiaire',
       memberCount: 0,
-      popularity: 0,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString()
-    };
+      popularity: 0
+    });
 
-    const specialty = await databases.createDocument(
-      DATABASE_ID,
-      SPECIALTIES_COLLECTION_ID,
-      ID.unique(),
-      specialtyData
-    );
+    await specialty.save();
 
     res.status(201).json({
       success: true,
-      data: specialty,
-      message: 'Spécialité créée avec succès'
+      message: 'Spécialité créée avec succès',
+      data: specialty
     });
   } catch (err) {
-    console.error('Erreur création spécialité:', err);
+    console.error('❌ Erreur POST /specialties:', err);
     res.status(400).json({ 
       success: false,
-      message: 'Erreur de création de la spécialité',
-      error: err.message 
+      message: err.message 
     });
   }
 });
@@ -143,87 +167,72 @@ router.post('/', async (req, res) => {
 // PUT /api/v1/specialties/:id - Mettre à jour une spécialité
 router.put('/:id', async (req, res) => {
   try {
-    const updates = {
-      ...req.body,
-      updatedAt: new Date().toISOString()
-    };
-
-    // Si le nom est modifié, recatégoriser automatiquement
-    if (updates.name) {
-      updates.category = categorizeSpecialty(updates.name);
-    }
-
-    const specialty = await databases.updateDocument(
-      DATABASE_ID,
-      SPECIALTIES_COLLECTION_ID,
+    const specialty = await Specialty.findByIdAndUpdate(
       req.params.id,
-      updates
+      req.body,
+      { new: true, runValidators: true }
     );
+    
+    if (!specialty) {
+      return res.status(404).json({ 
+        success: false,
+        message: 'Spécialité non trouvée' 
+      });
+    }
 
     res.json({
       success: true,
-      data: specialty,
-      message: 'Spécialité mise à jour avec succès'
+      message: 'Spécialité mise à jour avec succès',
+      data: specialty
     });
   } catch (err) {
-    console.error('Erreur mise à jour spécialité:', err);
-    if (err.code === 404) {
-      return res.status(404).json({ 
-        success: false,
-        message: 'Spécialité non trouvée' 
-      });
-    }
+    console.error(`❌ Erreur PUT /specialties/${req.params.id}:`, err);
     res.status(400).json({ 
       success: false,
-      message: 'Erreur de mise à jour de la spécialité',
-      error: err.message 
+      message: err.message 
     });
   }
 });
 
-// DELETE /api/v1/specialties/:id - Supprimer une spécialité
+// DELETE /api/v1/specialties/:id - Supprimer une spécialité (soft delete)
 router.delete('/:id', async (req, res) => {
   try {
-    await databases.deleteDocument(
-      DATABASE_ID,
-      SPECIALTIES_COLLECTION_ID,
-      req.params.id
+    const specialty = await Specialty.findByIdAndUpdate(
+      req.params.id,
+      { isActive: false },
+      { new: true }
     );
-
-    res.json({ 
-      success: true,
-      message: 'Spécialité supprimée avec succès' 
-    });
-  } catch (err) {
-    console.error('Erreur suppression spécialité:', err);
-    if (err.code === 404) {
+    
+    if (!specialty) {
       return res.status(404).json({ 
         success: false,
         message: 'Spécialité non trouvée' 
       });
     }
+
+    res.json({
+      success: true,
+      message: 'Spécialité supprimée avec succès'
+    });
+  } catch (err) {
+    console.error(`❌ Erreur DELETE /specialties/${req.params.id}:`, err);
     res.status(500).json({ 
       success: false,
-      message: 'Erreur de suppression de la spécialité',
-      error: err.message 
+      message: err.message 
     });
   }
 });
 
-// POST /api/v1/specialties/sync - Synchroniser les spécialités avec les membres
+// POST /api/v1/specialties/sync - Synchroniser les spécialités avec les membres (IMPORTANT)
 router.post('/sync', async (req, res) => {
   try {
-    // Récupérer tous les membres
-    const membersResponse = await databases.listDocuments(
-      DATABASE_ID,
-      MEMBERS_COLLECTION_ID,
-      [Query.limit(1000)]
-    );
-
-    const members = membersResponse.documents;
+    console.log('🔄 Démarrage synchronisation spécialités...');
+    
+    const members = await Member.find({ isActive: true });
     const specialtyMap = new Map();
+    const totalMembers = members.length;
 
-    console.log(`📊 Synchronisation avec ${members.length} membres`);
+    console.log(`📊 Analyse de ${totalMembers} membres...`);
 
     // Extraire les spécialités des membres
     members.forEach(member => {
@@ -231,260 +240,204 @@ router.post('/sync', async (req, res) => {
         member.specialties.forEach(specialtyName => {
           if (specialtyName && typeof specialtyName === 'string' && specialtyName.trim()) {
             const name = specialtyName.trim();
+            
             if (!specialtyMap.has(name)) {
               specialtyMap.set(name, {
                 name: name,
                 memberCount: 0,
-                category: categorizeSpecialty(name)
+                category: categorizeSpecialty(name),
+                members: []
               });
             }
-            specialtyMap.get(name).memberCount++;
+            
+            const specialtyData = specialtyMap.get(name);
+            specialtyData.memberCount++;
+            specialtyData.members.push(member._id);
           }
         });
       }
     });
 
-    const syncResults = {
-      created: 0,
-      updated: 0,
-      total: specialtyMap.size,
-      specialties: []
-    };
+    console.log(`🎯 ${specialtyMap.size} spécialités trouvées dans les membres`);
 
     // Synchroniser avec la base de données
+    const syncResults = [];
+    
     for (const [name, data] of specialtyMap) {
       try {
-        // Chercher si la spécialité existe déjà
-        const existingSpecialties = await databases.listDocuments(
-          DATABASE_ID,
-          SPECIALTIES_COLLECTION_ID,
-          [Query.equal('name', name)]
+        const popularity = totalMembers > 0 ? (data.memberCount / totalMembers) * 100 : 0;
+        
+        const specialty = await Specialty.findOneAndUpdate(
+          { name: { $regex: new RegExp(`^${name}$`, 'i') } },
+          {
+            name: data.name,
+            category: data.category,
+            memberCount: data.memberCount,
+            popularity: popularity,
+            isActive: true,
+            updatedAt: new Date()
+          },
+          { 
+            upsert: true, 
+            new: true,
+            setDefaultsOnInsert: true 
+          }
         );
 
-        const specialtyData = {
-          name: data.name,
-          category: data.category,
-          memberCount: data.memberCount,
-          popularity: members.length > 0 ? (data.memberCount / members.length) * 100 : 0,
-          updatedAt: new Date().toISOString()
-        };
+        syncResults.push({
+          name: specialty.name,
+          action: specialty.isNew ? 'CREATED' : 'UPDATED',
+          memberCount: specialty.memberCount,
+          popularity: specialty.popularity
+        });
 
-        if (existingSpecialties.total > 0) {
-          // Mettre à jour la spécialité existante
-          const existing = existingSpecialties.documents[0];
-          await databases.updateDocument(
-            DATABASE_ID,
-            SPECIALTIES_COLLECTION_ID,
-            existing.$id,
-            specialtyData
-          );
-          syncResults.updated++;
-        } else {
-          // Créer une nouvelle spécialité
-          specialtyData.createdAt = new Date().toISOString();
-          await databases.createDocument(
-            DATABASE_ID,
-            SPECIALTIES_COLLECTION_ID,
-            ID.unique(),
-            specialtyData
-          );
-          syncResults.created++;
-        }
+        console.log(`✅ ${specialty.isNew ? 'Créé' : 'Mis à jour'}: ${specialty.name} (${specialty.memberCount} membres)`);
       } catch (error) {
-        console.error(`Erreur synchronisation spécialité ${name}:`, error);
+        console.error(`❌ Erreur sync spécialité ${name}:`, error);
+        syncResults.push({
+          name: name,
+          action: 'ERROR',
+          error: error.message
+        });
       }
     }
 
-    // Récupérer les spécialités après synchronisation
-    const specialtiesResponse = await databases.listDocuments(
-      DATABASE_ID,
-      SPECIALTIES_COLLECTION_ID,
-      [Query.orderDesc('memberCount')]
+    // Désactiver les spécialités orphelines (aucun membre)
+    const usedSpecialtyNames = Array.from(specialtyMap.keys());
+    const deactivateResult = await Specialty.updateMany(
+      { 
+        name: { $nin: usedSpecialtyNames.map(s => new RegExp(`^${s}$`, 'i')) },
+        isActive: true
+      },
+      { 
+        isActive: false,
+        memberCount: 0,
+        popularity: 0,
+        updatedAt: new Date()
+      }
     );
 
-    syncResults.specialties = specialtiesResponse.documents;
+    console.log(`🗑️ ${deactivateResult.modifiedCount} spécialités orphelines désactivées`);
+
+    const finalSpecialties = await Specialty.find({ isActive: true }).sort({ memberCount: -1 });
 
     res.json({
       success: true,
-      message: `Synchronisation terminée: ${syncResults.created} créées, ${syncResults.updated} mises à jour, ${syncResults.total} au total`,
-      data: syncResults
+      message: `Synchronisation terminée: ${finalSpecialties.length} spécialités actives`,
+      stats: {
+        totalSpecialties: finalSpecialties.length,
+        totalMembers: totalMembers,
+        specialtiesCreated: syncResults.filter(r => r.action === 'CREATED').length,
+        specialtiesUpdated: syncResults.filter(r => r.action === 'UPDATED').length,
+        specialtiesDeactivated: deactivateResult.modifiedCount
+      },
+      data: finalSpecialties,
+      details: syncResults
     });
 
   } catch (err) {
-    console.error('Erreur synchronisation spécialités:', err);
+    console.error('❌ Erreur synchronisation spécialités:', err);
     res.status(500).json({ 
       success: false,
-      message: 'Erreur de synchronisation des spécialités',
+      message: 'Erreur lors de la synchronisation',
       error: err.message 
     });
   }
 });
 
-// POST /api/v1/specialties/auto-categorize - Catégoriser automatiquement toutes les spécialités
-router.post('/auto-categorize', async (req, res) => {
+// POST /api/v1/specialties/assign-random - Assigner aléatoirement des spécialités aux membres
+router.post('/assign-random', async (req, res) => {
   try {
-    const specialtiesResponse = await databases.listDocuments(
-      DATABASE_ID,
-      SPECIALTIES_COLLECTION_ID,
-      [Query.limit(1000)]
-    );
+    const members = await Member.find({ isActive: true });
+    const specialties = await Specialty.find({ isActive: true });
+    
+    let assignedCount = 0;
 
-    let updatedCount = 0;
-    const updatePromises = specialtiesResponse.documents.map(specialty => {
-      const newCategory = categorizeSpecialty(specialty.name);
+    for (const member of members) {
+      // Assigner 1-3 spécialités aléatoires
+      const randomCount = Math.floor(Math.random() * 3) + 1;
+      const shuffled = [...specialties].sort(() => 0.5 - Math.random());
+      const randomSpecialties = shuffled.slice(0, randomCount);
       
-      if (specialty.category !== newCategory) {
-        updatedCount++;
-        return databases.updateDocument(
-          DATABASE_ID,
-          SPECIALTIES_COLLECTION_ID,
-          specialty.$id,
-          {
-            category: newCategory,
-            updatedAt: new Date().toISOString()
-          }
-        );
-      }
-      return Promise.resolve();
-    });
+      // Stocker les noms des spécialités (comme dans le modèle Member actuel)
+      member.specialties = randomSpecialties.map(spec => spec.name);
+      await member.save();
+      assignedCount++;
+    }
 
-    await Promise.all(updatePromises);
+    // Synchroniser les compteurs après assignation
+    await syncSpecialtiesCounters();
 
     res.json({
       success: true,
-      message: `Catégorisation automatique terminée: ${updatedCount} spécialités mises à jour`,
-      data: {
-        updated: updatedCount,
-        total: specialtiesResponse.total
-      }
+      message: `Spécialités assignées à ${assignedCount} membres`,
+      assignedCount: assignedCount
     });
 
   } catch (err) {
-    console.error('Erreur catégorisation automatique:', err);
+    console.error('❌ Erreur assignation aléatoire:', err);
     res.status(500).json({ 
       success: false,
-      message: 'Erreur de catégorisation automatique',
-      error: err.message 
+      message: err.message 
     });
   }
 });
 
-// GET /api/v1/specialties/stats/overview - Récupérer les statistiques des spécialités
-router.get('/stats/overview', async (req, res) => {
+// Fonction utilitaire pour synchroniser les compteurs
+async function syncSpecialtiesCounters() {
   try {
-    const [specialtiesResponse, membersResponse] = await Promise.all([
-      databases.listDocuments(DATABASE_ID, SPECIALTIES_COLLECTION_ID),
-      databases.listDocuments(DATABASE_ID, MEMBERS_COLLECTION_ID)
-    ]);
-
-    const specialties = specialtiesResponse.documents;
-    const members = membersResponse.documents;
-
-    const totalSpecialties = specialties.length;
-    const totalMembers = members.length;
+    const specialties = await Specialty.find({ isActive: true });
     
-    // Calculer la moyenne des spécialités par membre
-    const totalSpecialtiesCount = members.reduce((acc, member) => {
-      return acc + (member.specialties?.length || 0);
-    }, 0);
-    
-    const avgSpecialtiesPerMember = totalMembers > 0 ? 
-      (totalSpecialtiesCount / totalMembers).toFixed(1) : 0;
-
-    // Statistiques par catégorie
-    const categoryStats = {};
-    specialties.forEach(specialty => {
-      const category = specialty.category || 'autre';
-      if (!categoryStats[category]) {
-        categoryStats[category] = {
-          count: 0,
-          totalMembers: 0,
-          specialties: []
-        };
-      }
-      categoryStats[category].count++;
-      categoryStats[category].totalMembers += specialty.memberCount || 0;
-      categoryStats[category].specialties.push({
-        name: specialty.name,
-        memberCount: specialty.memberCount
+    for (const specialty of specialties) {
+      const memberCount = await Member.countDocuments({
+        specialties: { $regex: new RegExp(specialty.name, 'i') },
+        isActive: true
       });
-    });
-
-    // Top 5 des spécialités les plus populaires
-    const mostPopularSpecialties = specialties
-      .sort((a, b) => (b.memberCount || 0) - (a.memberCount || 0))
-      .slice(0, 5)
-      .map(s => ({
-        name: s.name,
-        memberCount: s.memberCount,
-        popularity: s.popularity,
-        category: s.category
-      }));
-
-    res.json({
-      success: true,
-      data: {
-        totalSpecialties,
-        totalMembers,
-        avgSpecialtiesPerMember: parseFloat(avgSpecialtiesPerMember),
-        categoryStats,
-        mostPopularSpecialties
-      }
-    });
-
-  } catch (err) {
-    console.error('Erreur récupération statistiques:', err);
-    res.status(500).json({ 
-      success: false,
-      message: 'Erreur de récupération des statistiques',
-      error: err.message 
-    });
-  }
-});
-
-// GET /api/v1/specialties/category/:category - Récupérer les spécialités par catégorie
-router.get('/category/:category', async (req, res) => {
-  try {
-    const { category } = req.params;
+      
+      specialty.memberCount = memberCount;
+      await specialty.save();
+    }
     
-    const response = await databases.listDocuments(
-      DATABASE_ID,
-      SPECIALTIES_COLLECTION_ID,
-      [
-        Query.equal('category', category),
-        Query.orderDesc('memberCount')
-      ]
-    );
-
-    res.json({
-      success: true,
-      data: response.documents,
-      total: response.total,
-      category: category
-    });
-  } catch (err) {
-    console.error('Erreur récupération par catégorie:', err);
-    res.status(500).json({ 
-      success: false,
-      message: 'Erreur de récupération des spécialités par catégorie',
-      error: err.message 
-    });
+    console.log('✅ Compteurs de spécialités synchronisés');
+  } catch (error) {
+    console.error('❌ Erreur synchronisation compteurs:', error);
   }
-});
+}
 
-// Fonction de catégorisation automatique améliorée
+// Fonction de catégorisation automatique
 function categorizeSpecialty(specialtyName) {
-  if (!specialtyName || typeof specialtyName !== 'string') return 'autre';
-  
   const name = specialtyName.toLowerCase();
   
   const categories = {
-    technique: ['technique', 'ingénieur', 'technolog', 'informatique', 'digital', 'software', 'hardware', 'code', 'programmation', 'développement', 'coding', 'algorithm', 'data', 'ai', 'intelligence artificielle'],
-    management: ['gestion', 'management', 'leadership', 'projet', 'équipe', 'qualité', 'sécurité', 'admin', 'coordination', 'supervision', 'stratégie', 'planification', 'organisation'],
-    industrie: ['industrie', 'production', 'manufactur', 'usine', 'fabrication', 'process', 'opération', 'maintenance', 'industriel', 'production', 'manufacturing'],
-    recherche: ['recherche', 'développement', 'r&d', 'innovation', 'scientifique', 'étude', 'analyse', 'laboratoire', 'expérimentation', 'science', 'académique', 'publication'],
-    environnement: ['environnement', 'écolog', 'durable', 'climat', 'biodiversité', 'conservation', 'nature', 'écologique', 'green', 'sustainable', 'écologie'],
-    energie: ['énergie', 'solaire', 'éolien', 'hydraulique', 'renouvelable', 'nucléaire', 'thermique', 'électricité', 'power', 'grid', 'smart grid', 'énergie']
+    technique: [
+      'technique', 'ingénieur', 'technolog', 'informatique', 'digital', 'software', 
+      'hardware', 'code', 'programmation', 'développement', 'coding', 'algorithm', 
+      'data', 'ai', 'intelligence artificielle', 'robotique', 'automatisation',
+      'hydraulique', 'génie', 'civil', 'mécanique', 'électrique', 'construction', 'ingénierie'
+    ],
+    management: [
+      'gestion', 'management', 'leadership', 'projet', 'équipe', 'qualité', 
+      'sécurité', 'admin', 'coordination', 'supervision', 'stratégie', 
+      'planification', 'organisation', 'direction'
+    ],
+    industrie: [
+      'industrie', 'production', 'manufactur', 'usine', 'fabrication', 'process', 
+      'opération', 'maintenance', 'industriel', 'production', 'manufacturing',
+      'usinage', 'assemblage', 'agro', 'logistique'
+    ],
+    recherche: [
+      'recherche', 'développement', 'r&d', 'innovation', 'scientifique', 'étude', 
+      'analyse', 'laboratoire', 'expérimentation', 'science', 'académique', 
+      'publication', 'thèse', 'doctorat', 'biotechnologie'
+    ],
+    environnement: [
+      'environnement', 'écolog', 'durable', 'climat', 'biodiversité', 'conservation', 
+      'nature', 'écologique', 'green', 'sustainable', 'écologie', 'carbone'
+    ],
+    energie: [
+      'énergie', 'solaire', 'éolien', 'hydraulique', 'renouvelable', 'nucléaire', 
+      'thermique', 'électricité', 'power', 'grid', 'smart grid'
+    ]
   };
 
   for (const [category, keywords] of Object.entries(categories)) {
