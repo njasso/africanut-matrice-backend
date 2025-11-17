@@ -1,8 +1,8 @@
-// functions/get-matrice/src/index.js - VERSION COMPLÈTE SANS LIMITES
+// functions/get-matrice/src/index.js - VERSION CORRIGÉE POUR SPÉCIALITÉS/COMPÉTENCES
 import { MongoClient } from "mongodb";
 
 export default async function handler({ req, res, log, error }) {
-  log("🚀 Fonction Appwrite lancée : get-matrice - SANS LIMITES");
+  log("🚀 Fonction Appwrite lancée : get-matrice - VERSION CORRIGÉE");
 
   const MONGO_URI = process.env.MONGODB_URI;
   const DB_NAME = process.env.MONGODB_DB_NAME || "matrice";
@@ -26,6 +26,8 @@ export default async function handler({ req, res, log, error }) {
     const db = client.db(DB_NAME);
     
     // 🔹 Récupérer TOUTES les collections SANS LIMITES
+    log("📥 Récupération de toutes les collections...");
+    
     const [
       members,
       projects,
@@ -35,7 +37,7 @@ export default async function handler({ req, res, log, error }) {
       specialties,
       interactions
     ] = await Promise.all([
-      // Membres - TOUS
+      // Membres - TOUS avec champs complets
       db.collection('members').find({}).toArray(),
       
       // Projets - TOUS, triés par date
@@ -59,33 +61,139 @@ export default async function handler({ req, res, log, error }) {
 
     log(`📊 DONNÉES COMPLÈTES: ${members.length} membres, ${projects.length} projets, ${groups.length} groupes, ${analyses.length} analyses, ${skills.length} compétences, ${specialties.length} spécialités, ${interactions.length} interactions`);
 
-    // 🔹 Formater les données
+    // 🔹 DEBUG: Analyser les premiers membres pour vérifier les données
+    if (members.length > 0) {
+      log("🔍 ANALYSE DES DONNÉES MEMBRES:");
+      members.slice(0, 3).forEach((member, index) => {
+        log(`Membre ${index + 1} - ${member.name}:`, {
+          specialties: member.specialties,
+          skills: member.skills,
+          typeSpecialties: typeof member.specialties,
+          typeSkills: typeof member.skills,
+          specialtiesLength: member.specialties ? member.specialties.length : 0,
+          skillsLength: member.skills ? member.skills.length : 0
+        });
+      });
+    }
 
-    // MEMBRES
-    const formattedMembers = members.map(member => ({
-      _id: member._id?.toString(),
-      name: member.name || '',
-      title: member.title || '',
-      email: member.email || '',
-      phone: member.phone || '',
-      specialties: Array.isArray(member.specialties) ? member.specialties : [],
-      skills: Array.isArray(member.skills) ? member.skills : [],
-      location: member.location || '',
-      organization: member.organization || '',
-      entreprise: member.entreprise || '',
-      experienceYears: member.experienceYears || 0,
-      projects: member.projects || '',
-      availability: member.availability || '',
-      statutMembre: member.statutMembre || 'Actif',
-      photo: member.photo || '',
-      cvLink: member.cvLink || '',
-      linkedin: member.linkedin || '',
-      isActive: member.isActive !== undefined ? member.isActive : true,
-      createdAt: member.createdAt,
-      updatedAt: member.updatedAt
-    }));
+    // 🔹 CORRECTION CRITIQUE: Formater les membres avec gestion des spécialités/compétences
+    const formattedMembers = members.map(member => {
+      log(`🔄 Formatage membre: ${member.name}`);
+      
+      // 🔹 CORRECTION DES SPÉCIALITÉS
+      let memberSpecialties = [];
+      if (Array.isArray(member.specialties)) {
+        // Cas normal: déjà un tableau
+        memberSpecialties = member.specialties
+          .map(spec => {
+            if (typeof spec === 'string') {
+              return spec.trim();
+            }
+            return String(spec).trim();
+          })
+          .filter(spec => spec && spec !== '' && spec !== 'null' && spec !== 'undefined');
+        
+        log(`✅ ${member.name} - Spécialités tableau: ${memberSpecialties.length} items`);
+      } else if (typeof member.specialties === 'string') {
+        // Cas string: conversion en tableau
+        memberSpecialties = member.specialties
+          .split(/[,;|]/)
+          .map(spec => spec.trim())
+          .filter(spec => spec && spec !== '' && spec !== 'null' && spec !== 'undefined');
+        
+        log(`🔄 ${member.name} - Spécialités string convertie: ${memberSpecialties.length} items`);
+      } else if (member.specialties) {
+        // Autre type (ObjectId, etc.)
+        memberSpecialties = [String(member.specialties).trim()];
+        log(`⚠️ ${member.name} - Spécialités autre type: ${memberSpecialties.length} items`);
+      }
 
-    // PROJETS
+      // 🔹 CORRECTION DES COMPÉTENCES
+      let memberSkills = [];
+      if (Array.isArray(member.skills)) {
+        memberSkills = member.skills
+          .map(skill => {
+            if (typeof skill === 'string') {
+              return skill.trim();
+            }
+            return String(skill).trim();
+          })
+          .filter(skill => skill && skill !== '' && skill !== 'null' && skill !== 'undefined');
+        
+        log(`✅ ${member.name} - Compétences tableau: ${memberSkills.length} items`);
+      } else if (typeof member.skills === 'string') {
+        memberSkills = member.skills
+          .split(/[,;|]/)
+          .map(skill => skill.trim())
+          .filter(skill => skill && skill !== '' && skill !== 'null' && skill !== 'undefined');
+        
+        log(`🔄 ${member.name} - Compétences string convertie: ${memberSkills.length} items`);
+      } else if (member.skills) {
+        memberSkills = [String(member.skills).trim()];
+        log(`⚠️ ${member.name} - Compétences autre type: ${memberSkills.length} items`);
+      }
+
+      // 🔹 CORRECTION DES CHEMINS DE PHOTOS
+      let photoUrl = member.photo || '';
+      if (photoUrl && photoUrl.startsWith('../assets/photos/')) {
+        photoUrl = photoUrl.replace('../assets/photos/', '/assets/photos/');
+        log(`🖼️ ${member.name} - Photo corrigée: ${photoUrl}`);
+      }
+
+      const formattedMember = {
+        _id: member._id?.toString(),
+        name: member.name || '',
+        title: member.title || '',
+        email: member.email || '',
+        phone: member.phone || '',
+        
+        // 🔹 CHAMPS CORRIGÉS
+        specialties: memberSpecialties,
+        skills: memberSkills,
+        
+        location: member.location || '',
+        organization: member.organization || '',
+        entreprise: member.entreprise || '',
+        experienceYears: member.experienceYears || 0,
+        projects: member.projects || '',
+        availability: member.availability || '',
+        statutMembre: member.statutMembre || 'Actif',
+        photo: photoUrl,
+        cvLink: member.cvLink || '',
+        linkedin: member.linkedin || '',
+        isActive: member.isActive !== undefined ? member.isActive : true,
+        createdAt: member.createdAt,
+        updatedAt: member.updatedAt
+      };
+
+      // 🔹 LOG FINAL POUR VÉRIFICATION
+      log(`✅ ${member.name} formaté:`, {
+        specialtiesCount: formattedMember.specialties.length,
+        skillsCount: formattedMember.skills.length,
+        hasSpecialties: formattedMember.specialties.length > 0,
+        hasSkills: formattedMember.skills.length > 0
+      });
+
+      return formattedMember;
+    });
+
+    // 🔹 VÉRIFICATION FINALE DES DONNÉES
+    const membersWithSpecialties = formattedMembers.filter(m => m.specialties.length > 0).length;
+    const membersWithSkills = formattedMembers.filter(m => m.skills.length > 0).length;
+    
+    log("🎯 VÉRIFICATION FINALE:");
+    log(`- Membres avec spécialités: ${membersWithSpecialties}/${formattedMembers.length}`);
+    log(`- Membres avec compétences: ${membersWithSkills}/${formattedMembers.length}`);
+    
+    // Afficher les détails des 3 premiers membres formatés
+    formattedMembers.slice(0, 3).forEach((member, index) => {
+      log(`📋 Membre ${index + 1} final: ${member.name}`, {
+        specialties: member.specialties,
+        skills: member.skills
+      });
+    });
+
+    // 🔹 Formater les autres collections (inchangé)
     const formattedProjects = projects.map(project => ({
       _id: project._id?.toString(),
       title: project.title || 'Sans titre',
@@ -100,7 +208,6 @@ export default async function handler({ req, res, log, error }) {
       __v: project.__v || 0
     }));
 
-    // GROUPES
     const formattedGroups = groups.map(group => ({
       _id: group._id?.toString(),
       name: group.name || '',
@@ -117,7 +224,6 @@ export default async function handler({ req, res, log, error }) {
       __v: group.__v || 0
     }));
 
-    // ANALYSES
     const formattedAnalyses = analyses.map(analysis => ({
       _id: analysis._id?.toString(),
       type: analysis.type || 'interaction_analysis',
@@ -134,7 +240,6 @@ export default async function handler({ req, res, log, error }) {
       __v: analysis.__v || 0
     }));
 
-    // COMPÉTENCES
     const formattedSkills = skills.map(skill => ({
       _id: skill._id?.toString(),
       name: skill.name || '',
@@ -148,7 +253,6 @@ export default async function handler({ req, res, log, error }) {
       __v: skill.__v || 0
     }));
 
-    // SPÉCIALITÉS
     const formattedSpecialties = specialties.map(specialty => ({
       _id: specialty._id?.toString(),
       name: specialty.name || '',
@@ -162,7 +266,6 @@ export default async function handler({ req, res, log, error }) {
       __v: specialty.__v || 0
     }));
 
-    // INTERACTIONS
     const formattedInteractions = interactions.map(interaction => ({
       _id: interaction._id?.toString(),
       type: interaction.type || 'message',
@@ -184,9 +287,9 @@ export default async function handler({ req, res, log, error }) {
 
     await client.close();
 
-    log(`✅ FORMATAGE TERMINÉ: ${formattedProjects.length} projets, ${formattedMembers.length} membres, ${formattedGroups.length} groupes, ${formattedInteractions.length} interactions`);
+    log(`✅ FORMATAGE TERMINÉ: ${formattedProjects.length} projets, ${formattedMembers.length} membres formatés`);
 
-    // 🔹 IMPORTANT: Retourner TOUTES les données
+    // 🔹 IMPORTANT: Retourner TOUTES les données avec format corrigé
     return res.json({
       success: true,
       // Format principal pour le frontend
@@ -204,7 +307,7 @@ export default async function handler({ req, res, log, error }) {
         interactions: formattedInteractions
       },
       
-      // Statistiques complètes
+      // Statistiques complètes avec vérification spécialités/compétences
       totals: {
         members: formattedMembers.length,
         projects: formattedProjects.length,
@@ -212,13 +315,26 @@ export default async function handler({ req, res, log, error }) {
         analyses: formattedAnalyses.length,
         skills: formattedSkills.length,
         specialties: formattedSpecialties.length,
-        interactions: formattedInteractions.length
+        interactions: formattedInteractions.length,
+        membersWithSpecialties: membersWithSpecialties,
+        membersWithSkills: membersWithSkills
+      },
+      
+      // Métadonnées de debug
+      debug: {
+        membersSample: formattedMembers.slice(0, 2).map(m => ({
+          name: m.name,
+          specialtiesCount: m.specialties.length,
+          skillsCount: m.skills.length,
+          specialties: m.specialties,
+          skills: m.skills
+        }))
       },
       
       // Métadonnées
       lastUpdated: new Date().toISOString(),
       database: DB_NAME,
-      message: `TOUTES les données chargées: ${formattedProjects.length} projets, ${formattedMembers.length} membres, ${formattedGroups.length} groupes, ${formattedInteractions.length} interactions`
+      message: `Données chargées avec succès: ${formattedMembers.length} membres (${membersWithSpecialties} avec spécialités, ${membersWithSkills} avec compétences)`
     });
 
   } catch (err) {
