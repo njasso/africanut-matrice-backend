@@ -1,50 +1,44 @@
-const mongoose = require('mongoose');
+// routes/analyses.js - VERSION CORRIGÉE
+const Analysis = require('../models/Analysis');
 
-const analysisSchema = new mongoose.Schema({
-  type: {
-    type: String,
-    required: true,
-    enum: ['interaction_analysis', 'skills_analysis', 'specialties_analysis']
-  },
-  title: {
-    type: String,
-    required: true
-  },
-  description: {
-    type: String,
-    default: ''
-  },
-  insights: {
-    type: mongoose.Schema.Types.Mixed,
-    default: {}
-  },
-  suggestions: {
-    type: [mongoose.Schema.Types.Mixed],
-    default: []
-  },
-  dataSummary: {
-    type: mongoose.Schema.Types.Mixed,
-    default: {}
-  },
-  statistics: {
-    type: mongoose.Schema.Types.Mixed,
-    default: {}
-  },
-  status: {
-    type: String,
-    enum: ['pending', 'completed', 'failed'],
-    default: 'completed'
-  },
-  timestamp: {
-    type: Date,
-    default: Date.now
+router.post('/save-synergy-analysis', async (req, res) => {
+  try {
+    const { 
+      type, 
+      title, 
+      description, 
+      analysisData, 
+      statistics 
+    } = req.body;
+
+    // Adapter les données du frontend au schéma
+    const analysisDoc = new Analysis({
+      type: 'professional_synergy_analysis', // Forcer le type valide
+      title,
+      description,
+      analysisData: analysisData, // Stocker dans analysisData
+      insights: analysisData.summary || {},
+      suggestions: analysisData.synergies || [],
+      statistics: statistics || {},
+      dataSummary: {
+        totalMembers: statistics?.totalMembers || 0,
+        totalProjects: statistics?.totalProjects || 0
+      },
+      analysisTimestamp: analysisData.timestamp || new Date()
+    });
+
+    const savedAnalysis = await analysisDoc.save();
+    
+    res.json({
+      success: true,
+      message: 'Analyse de synergies sauvegardée avec succès',
+      data: savedAnalysis
+    });
+  } catch (error) {
+    console.error('💥 Erreur sauvegarde analyse:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Erreur lors de la sauvegarde'
+    });
   }
-}, {
-  timestamps: true
 });
-
-// Index pour les requêtes fréquentes
-analysisSchema.index({ type: 1, createdAt: -1 });
-analysisSchema.index({ status: 1 });
-
-module.exports = mongoose.model('Analysis', analysisSchema);
