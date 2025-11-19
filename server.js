@@ -1,4 +1,4 @@
-// server.js - VERSION COMPLÈTEMENT MISE À JOUR POUR APPWRITE + NETLIFY
+// server.js - VERSION COMPLÈTEMENT MISE À JOUR POUR SYNERGIES + TOUTES LES COLLECTIONS
 require('dotenv').config();
 const express = require('express');
 const mongoose = require('mongoose');
@@ -114,7 +114,332 @@ try {
   console.error('❌ Error loading models:', error.message);
 }
 
-// ==================== NOUVELLES ROUTES POUR NETLIFY ====================
+// ==================== NOUVELLES ROUTES POUR SYNERGIES ET DONNÉES COMPLÈTES ====================
+
+// 🔹 ROUTE POUR TOUTES LES DONNÉES DE LA MATRICE
+app.get('/api/v1/all-data/matrix-data', async (req, res) => {
+  try {
+    console.log('📦 GET /api/v1/all-data/matrix-data - Récupération de toutes les données...');
+
+    // Récupérer toutes les collections en parallèle
+    const [
+      matrices,
+      analyses,
+      groups,
+      interactions,
+      members,
+      projects,
+      skills,
+      specialties
+    ] = await Promise.all([
+      // Matrices collection
+      mongoose.connection.db.collection('matrice').find({}).toArray().catch(() => []),
+      
+      // Analyses collection
+      Analysis?.find({}).sort({ createdAt: -1 }).limit(50).catch(() => []) || [],
+      
+      // Groups collection
+      Group?.find({}).populate('members', 'name email organization title').catch(() => []) || [],
+      
+      // Interactions collection
+      Interaction?.find({}).populate('from to projects groups specialties').catch(() => []) || [],
+      
+      // Members collection
+      Member?.find({}).select('name title email organization specialties experienceYears skills location photo status').catch(() => []) || [],
+      
+      // Projects collection
+      Project?.find({}).populate('members', 'name email').catch(() => []) || [],
+      
+      // Skills collection
+      mongoose.connection.db.collection('skills').find({}).toArray().catch(() => []),
+      
+      // Specialties collection
+      Specialty?.find({}).catch(() => []) || []
+    ]);
+
+    const allData = {
+      matrices: matrices || [],
+      analyses: analyses || [],
+      groups: groups || [],
+      interactions: interactions || [],
+      members: members || [],
+      projects: projects || [],
+      skills: skills || [],
+      specialties: specialties || [],
+      metadata: {
+        totalMatrices: matrices?.length || 0,
+        totalAnalyses: analyses?.length || 0,
+        totalGroups: groups?.length || 0,
+        totalInteractions: interactions?.length || 0,
+        totalMembers: members?.length || 0,
+        totalProjects: projects?.length || 0,
+        totalSkills: skills?.length || 0,
+        totalSpecialties: specialties?.length || 0,
+        timestamp: new Date().toISOString()
+      }
+    };
+
+    console.log(`✅ Données récupérées: ${allData.metadata.totalMembers} membres, ${allData.metadata.totalProjects} projets, ${allData.metadata.totalAnalyses} analyses`);
+
+    res.json({
+      success: true,
+      data: allData,
+      message: 'Toutes les données récupérées avec succès'
+    });
+
+  } catch (error) {
+    console.error('💥 GET /api/v1/all-data/matrix-data error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Erreur lors de la récupération des données complètes',
+      error: isAppwrite ? 'Internal server error' : error.message
+    });
+  }
+});
+
+// 🔹 ROUTES POUR LES ANALYSES DE SYNERGIES
+const synergyAnalysisRoutes = express.Router();
+
+// POST - Sauvegarder une analyse de synergies
+synergyAnalysisRoutes.post('/', async (req, res) => {
+  try {
+    console.log('💾 POST /api/v1/synergy-analysis - Sauvegarde analyse...');
+    
+    const {
+      type = 'professional_synergy_analysis',
+      title,
+      description,
+      analysisData,
+      statistics,
+      timestamp = new Date()
+    } = req.body;
+
+    // Validation
+    if (!title || !analysisData) {
+      return res.status(400).json({
+        success: false,
+        message: 'Titre et données d\'analyse requis'
+      });
+    }
+
+    if (!Analysis) {
+      return res.status(500).json({
+        success: false,
+        message: 'Analysis model not available'
+      });
+    }
+
+    const newAnalysis = new Analysis({
+      type: 'professional_synergy_analysis',
+      title: title.trim(),
+      description: description?.trim() || `Analyse des synergies professionnelles - ${new Date().toLocaleDateString('fr-FR')}`,
+      analysisData: analysisData,
+      insights: {
+        totalSynergies: analysisData.synergies?.length || 0,
+        highPotential: analysisData.synergies?.filter(s => s.potential === 'Élevé').length || 0,
+        projectOpportunities: analysisData.projectOpportunities?.length || 0,
+        analyzedMembers: statistics?.totalMembers || 0
+      },
+      suggestions: analysisData.synergies?.map(synergy => ({
+        members: [synergy.member1?.name, synergy.member2?.name],
+        score: synergy.score,
+        potential: synergy.potential,
+        reason: synergy.reason,
+        recommendedActions: synergy.recommendedActions,
+        type: synergy.type
+      })) || [],
+      dataSummary: {
+        membersAnalyzed: statistics?.totalMembers || 0,
+        projectsAnalyzed: statistics?.totalProjects || 0,
+        skillsAnalyzed: statistics?.totalSkills || 0,
+        specialtiesAnalyzed: statistics?.totalSpecialties || 0
+      },
+      statistics: statistics || {},
+      analysisTimestamp: timestamp,
+      status: 'completed'
+    });
+
+    const savedAnalysis = await newAnalysis.save();
+    
+    console.log(`✅ Analyse sauvegardée: ${savedAnalysis._id} - ${savedAnalysis.suggestions?.length || 0} synergies`);
+
+    res.status(201).json({
+      success: true,
+      message: 'Analyse de synergies sauvegardée avec succès',
+      data: savedAnalysis,
+      analysisId: savedAnalysis._id
+    });
+
+  } catch (error) {
+    console.error('💥 POST /api/v1/synergy-analysis error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Erreur lors de la sauvegarde de l\'analyse',
+      error: isAppwrite ? 'Internal server error' : error.message
+    });
+  }
+});
+
+// GET - Récupérer toutes les analyses de synergies
+synergyAnalysisRoutes.get('/', async (req, res) => {
+  try {
+    console.log('📥 GET /api/v1/synergy-analysis - Récupération analyses...');
+
+    if (!Analysis) {
+      return res.status(500).json({
+        success: false,
+        message: 'Analysis model not available'
+      });
+    }
+
+    const { limit = 20, page = 1 } = req.query;
+    const skip = (parseInt(page) - 1) * parseInt(limit);
+
+    const analyses = await Analysis.find({ 
+      type: 'professional_synergy_analysis' 
+    })
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(parseInt(limit));
+
+    const total = await Analysis.countDocuments({ 
+      type: 'professional_synergy_analysis' 
+    });
+
+    console.log(`✅ ${analyses.length} analyses de synergies récupérées`);
+
+    res.json({
+      success: true,
+      data: analyses,
+      pagination: {
+        page: parseInt(page),
+        limit: parseInt(limit),
+        total,
+        pages: Math.ceil(total / parseInt(limit))
+      }
+    });
+  } catch (error) {
+    console.error('💥 GET /api/v1/synergy-analysis error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Erreur lors de la récupération des analyses',
+      error: isAppwrite ? 'Internal server error' : error.message
+    });
+  }
+});
+
+// GET - Récupérer une analyse spécifique
+synergyAnalysisRoutes.get('/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    console.log(`📥 GET /api/v1/synergy-analysis/${id} - Récupération analyse...`);
+
+    if (!Analysis) {
+      return res.status(500).json({
+        success: false,
+        message: 'Analysis model not available'
+      });
+    }
+
+    const analysis = await Analysis.findById(id);
+    
+    if (!analysis) {
+      return res.status(404).json({
+        success: false,
+        message: 'Analyse non trouvée'
+      });
+    }
+
+    res.json({
+      success: true,
+      data: analysis
+    });
+  } catch (error) {
+    console.error(`💥 GET /api/v1/synergy-analysis/${req.params.id} error:`, error);
+    res.status(500).json({
+      success: false,
+      message: 'Erreur lors de la récupération de l\'analyse',
+      error: isAppwrite ? 'Internal server error' : error.message
+    });
+  }
+});
+
+// DELETE - Supprimer une analyse
+synergyAnalysisRoutes.delete('/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    console.log(`🗑️ DELETE /api/v1/synergy-analysis/${id} - Suppression analyse...`);
+
+    if (!Analysis) {
+      return res.status(500).json({
+        success: false,
+        message: 'Analysis model not available'
+      });
+    }
+
+    const deletedAnalysis = await Analysis.findByIdAndDelete(id);
+    
+    if (!deletedAnalysis) {
+      return res.status(404).json({
+        success: false,
+        message: 'Analyse non trouvée'
+      });
+    }
+
+    res.json({
+      success: true,
+      message: 'Analyse supprimée avec succès',
+      deletedId: deletedAnalysis._id
+    });
+  } catch (error) {
+    console.error(`💥 DELETE /api/v1/synergy-analysis/${req.params.id} error:`, error);
+    res.status(500).json({
+      success: false,
+      message: 'Erreur lors de la suppression',
+      error: isAppwrite ? 'Internal server error' : error.message
+    });
+  }
+});
+
+// GET - Analyses récentes de synergies
+synergyAnalysisRoutes.get('/recent/:limit?', async (req, res) => {
+  try {
+    const limit = parseInt(req.params.limit) || 10;
+    console.log(`📥 GET /api/v1/synergy-analysis/recent/${limit} - Analyses récentes...`);
+
+    if (!Analysis) {
+      return res.status(500).json({
+        success: false,
+        message: 'Analysis model not available'
+      });
+    }
+
+    const analyses = await Analysis.find({ 
+      type: 'professional_synergy_analysis' 
+    })
+      .sort({ createdAt: -1 })
+      .limit(limit)
+      .select('title description insights statistics createdAt');
+
+    res.json({
+      success: true,
+      data: analyses,
+      total: analyses.length
+    });
+  } catch (error) {
+    console.error('💥 GET /api/v1/synergy-analysis/recent error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Erreur lors de la récupération des analyses récentes',
+      error: isAppwrite ? 'Internal server error' : error.message
+    });
+  }
+});
+
+// Utiliser les routes de synergies
+app.use('/api/v1/synergy-analysis', synergyAnalysisRoutes);
+
+// ==================== ROUTES EXISTANTES POUR NETLIFY ====================
 
 // 🔹 Route pour récupérer les membres avec filtres et pagination
 app.get('/api/v1/members/filter', async (req, res) => {
@@ -718,6 +1043,10 @@ app.get('/', (req, res) => {
       skills: '/api/v1/skills',
       specialties: '/api/v1/specialties',
       analyses: '/api/v1/analyses',
+      // NOUVEAUX ENDPOINTS
+      synergyAnalysis: '/api/v1/synergy-analysis',
+      allMatrixData: '/api/v1/all-data/matrix-data',
+      // EXISTANTS
       specialtiesSync: '/api/v1/specialties/sync',
       testCors: '/api/v1/test-cors'
     }
@@ -737,6 +1066,8 @@ app.use((req, res) => {
       '/api/v1/metadata',
       '/api/v1/members/filter',
       '/api/v1/groups',
+      '/api/v1/synergy-analysis',
+      '/api/v1/all-data/matrix-data',
       '/api/v1/test-cors'
     ]
   });
@@ -759,6 +1090,8 @@ app.listen(PORT, '0.0.0.0', () => {
   console.log(`🌐 Frontend: https://resplendent-nasturtium-1fb598.netlify.app`);
   console.log(`📊 Health check: http://0.0.0.0:${PORT}/api/v1/health`);
   console.log(`🔍 CORS test: http://0.0.0.0:${PORT}/api/v1/test-cors`);
+  console.log(`🎯 Synergy analysis: http://0.0.0.0:${PORT}/api/v1/synergy-analysis`);
+  console.log(`📦 All matrix data: http://0.0.0.0:${PORT}/api/v1/all-data/matrix-data`);
   
   if (isAppwrite) {
     console.log('✅ Successfully deployed on Appwrite');
