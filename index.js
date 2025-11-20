@@ -1,20 +1,56 @@
-
-// functions/get-matrice/src/index.js - VERSION OPTIMISÉE
-import { MongoClient } from "mongodb";
+// functions/sync-to-mongodb/src/index.js - FONCTION UNIVERSELLE
+import { MongoClient, ObjectId } from "mongodb";
 
 export default async function handler({ req, res, log, error }) {
-  log("🚀 Fonction Appwrite lancée : get-matrice - VERSION OPTIMISÉE");
+  log("🚀 Synchronisation universelle vers MongoDB Atlas - TOUTES LES COLLECTIONS");
 
   const MONGO_URI = process.env.MONGODB_URI;
   const DB_NAME = process.env.MONGODB_DB_NAME || "matrice";
 
   if (!MONGO_URI) {
-    const msg = "❌ Variable MONGODB_URI manquante !";
-    error(msg);
+    error("❌ Variable MONGODB_URI manquante !");
     return res.json({ 
       success: false, 
-      message: msg
+      message: "Configuration MongoDB manquante" 
     });
+  }
+
+  // Vérifier que nous avons des données
+  if (!req.body || Object.keys(req.body).length === 0) {
+    return res.json({
+      success: false,
+      message: "Aucune donnée à synchroniser"
+    });
+  }
+
+  const { 
+    collection, // 'members', 'projects', 'groups', 'analyses', 'interactions', 'skills', 'specialties'
+    data, 
+    operation = 'create', // 'create', 'update', 'delete', 'upsert', 'bulk'
+    id = null,
+    filter = {},
+    bulkData = []
+  } = req.body;
+  
+  const validCollections = ['members', 'projects', 'groups', 'analyses', 'interactions', 'skills', 'specialties'];
+  
+  if (!collection || !validCollections.includes(collection)) {
+    return res.json({
+      success: false,
+      message: `Collection invalide. Doit être: ${validCollections.join(', ')}`
+    });
+  }
+
+  if (!data && operation !== 'delete' && operation !== 'bulk') {
+    return res.json({
+      success: false,
+      message: "Données manquantes"
+    });
+  }
+
+  log(`📝 Opération: ${operation} - Collection: ${collection}`);
+  if (data) {
+    log("📦 Données reçues:", JSON.stringify(data).substring(0, 200) + "...");
   }
 
   let client;
@@ -25,53 +61,130 @@ export default async function handler({ req, res, log, error }) {
     log(`✅ Connecté à MongoDB - Base: ${DB_NAME}`);
 
     const db = client.db(DB_NAME);
-    
-    // 🔹 Récupérer TOUTES les collections avec gestion d'erreur individuelle
-    log("📥 Récupération de toutes les collections...");
-    
-    const collectionPromises = {
-      members: db.collection('members').find({}).toArray(),
-      projects: db.collection('projects').find({}).sort({ createdAt: -1 }).toArray(),
-      groups: db.collection('groups').find({}).toArray(),
-      analyses: db.collection('analyses').find({}).sort({ createdAt: -1 }).toArray(),
-      skills: db.collection('skills').find({}).toArray(),
-      specialties: db.collection('specialties').find({}).toArray(),
-      interactions: db.collection('interactions').find({}).sort({ createdAt: -1 }).toArray()
+    const collectionObj = db.collection(collection);
+
+    let result;
+    let mongoId;
+
+    // 🔹 FONCTION DE NETTOYAGE DES DONNÉES SPÉCIFIQUE À CHAQUE COLLECTION
+    const cleanData = (rawData, collectionType) => {
+      const cleaned = { ...rawData };
+      
+      // Retirer les champs système AppWrite si présents
+      delete cleaned.$id;
+      delete cleaned.$collectionId;
+      delete cleaned.$databaseId;
+      delete cleaned.$permissions;
+      delete cleaned.$createdAt;
+      delete cleaned.$updatedAt;
+      
+      // Nettoyer selon le type de collection
+      switch (collectionType) {
+        case 'members':
+          // Nettoyer les tableaux de compétences et spécialités
+          cleaned.specialties = cleanArray(cleaned.specialties, 'specialties');
+          cleaned.skills = cleanArray(cleaned.skills, 'skills');
+          cleaned.projects = cleanArray(cleaned.projects, 'projects');
+          
+          // Corriger les URLs de photos
+          if (cleaned.photo && cleaned.photo.startsWith('../assets/photos/')) {
+            cleaned.photo = cleaned.photo.replace('../assets/photos/', '/assets/photos/');
+          }
+          
+          // Assurer les champs requis
+          cleaned.name = cleaned.name || '';
+          cleaned.email = cleaned.email || '';
+          cleaned.statutMembre = cleaned.statutMembre || 'Actif';
+          cleaned.isActive = cleaned.isActive !== undefined ? cleaned.isActive : true;
+          break;
+          
+        case 'projects':
+          // Nettoyer les tags et membres
+          cleaned.tags = cleanArray(cleaned.tags, 'tags');
+          cleaned.members = cleanArray(cleaned.members, 'members');
+          
+          // Assurer les champs requis
+          cleaned.title = cleaned.title || 'Sans titre';
+          cleaned.description = cleaned.description || '';
+          cleaned.status = cleaned.status || 'idea';
+          cleaned.organization = cleaned.organization || '';
+          break;
+          
+        case 'groups':
+          // Nettoyer les tags et membres
+          cleaned.tags = cleanArray(cleaned.tags, 'tags');
+          cleaned.members = cleanArray(cleaned.members, 'members');
+          
+          // Assurer les champs requis
+          cleaned.name = cleaned.name || '';
+          cleaned.description = cleaned.description || '';
+          cleaned.type = cleaned.type || 'technique';
+          cleaned.privacy = cleaned.privacy || 'public';
+          break;
+          
+        case 'analyses':
+          // S'assurer que les insights et suggestions sont valides
+          if (cleaned.insights && typeof cleaned.insights === 'string') {
+            try {
+              cleaned.insights = JSON.parse(cleaned.insights);
+            } catch (e) {
+              cleaned.insights = {};
+            }
+          }
+          cleaned.insights = cleaned.insights || {};
+          
+          cleaned.suggestions = cleanArray(cleaned.suggestions, 'suggestions');
+          cleaned.statistics = cleaned.statistics || {};
+          
+          // Assurer les champs requis
+          cleaned.type = cleaned.type || 'interaction_analysis';
+          cleaned.title = cleaned.title || '';
+          cleaned.status = cleaned.status || 'completed';
+          break;
+          
+        case 'interactions':
+          // Nettoyer les tableaux de destinataires et projets
+          cleaned.to = cleanArray(cleaned.to, 'to');
+          cleaned.projects = cleanArray(cleaned.projects, 'projects');
+          
+          // Assurer les champs requis
+          cleaned.type = cleaned.type || 'message';
+          cleaned.title = cleaned.title || '';
+          cleaned.description = cleaned.description || '';
+          cleaned.status = cleaned.status || 'pending';
+          break;
+          
+        case 'skills':
+          // Nettoyer les données de compétences
+          cleaned.name = cleaned.name || '';
+          cleaned.category = cleaned.category || 'technique';
+          cleaned.description = cleaned.description || '';
+          cleaned.memberCount = cleaned.memberCount || 0;
+          break;
+          
+        case 'specialties':
+          // Nettoyer les données de spécialités
+          cleaned.name = cleaned.name || '';
+          cleaned.category = cleaned.category || 'technique';
+          cleaned.description = cleaned.description || '';
+          cleaned.memberCount = cleaned.memberCount || 0;
+          break;
+      }
+      
+      // Ajouter les timestamps
+      if (operation === 'create') {
+        cleaned.createdAt = new Date();
+        cleaned.updatedAt = new Date();
+      } else if (operation === 'update') {
+        cleaned.updatedAt = new Date();
+        // Ne pas écraser createdAt lors des updates
+        delete cleaned.createdAt;
+      }
+      
+      return cleaned;
     };
 
-    // 🔹 Exécution avec gestion d'erreur par collection
-    const results = await Promise.allSettled(Object.values(collectionPromises));
-    
-    const [
-      membersResult,
-      projectsResult,
-      groupsResult,
-      analysesResult,
-      skillsResult,
-      specialtiesResult,
-      interactionsResult
-    ] = results;
-
-    // 🔹 Extraction des données avec fallback
-    const members = membersResult.status === 'fulfilled' ? membersResult.value : [];
-    const projects = projectsResult.status === 'fulfilled' ? projectsResult.value : [];
-    const groups = groupsResult.status === 'fulfilled' ? groupsResult.value : [];
-    const analyses = analysesResult.status === 'fulfilled' ? analysesResult.value : [];
-    const skills = skillsResult.status === 'fulfilled' ? skillsResult.value : [];
-    const specialties = specialtiesResult.status === 'fulfilled' ? specialtiesResult.value : [];
-    const interactions = interactionsResult.status === 'fulfilled' ? interactionsResult.value : [];
-
-    // 🔹 Log des erreurs individuelles
-    const errors = results.filter(result => result.status === 'rejected');
-    if (errors.length > 0) {
-      errors.forEach((err, index) => {
-        error(`❌ Erreur collection ${index}: ${err.reason.message}`);
-      });
-    }
-
-    log(`📊 DONNÉES RÉCUPÉRÉES: ${members.length} membres, ${projects.length} projets, ${groups.length} groupes, ${analyses.length} analyses, ${skills.length} compétences, ${specialties.length} spécialités, ${interactions.length} interactions`);
-
-    // 🔹 FONCTION UNIVERSELLE DE NETTOYAGE DES TABLEAUX
+    // 🔹 FONCTION POUR NETTOYER LES TABLEAUX
     const cleanArray = (data, fieldName = '') => {
       if (!data) return [];
       
@@ -79,7 +192,13 @@ export default async function handler({ req, res, log, error }) {
         return data
           .map(item => {
             if (typeof item === 'string') return item.trim();
-            if (item && typeof item === 'object' && item.name) return item.name.trim();
+            if (item && typeof item === 'object') {
+              // Gérer les ObjectId et les objets avec _id
+              if (item._id) return item._id.toString();
+              if (item.$id) return item.$id;
+              if (item.name) return item.name.trim();
+              if (item.toString) return item.toString();
+            }
             return String(item).trim();
           })
           .filter(item => item && item !== '' && item !== 'null' && item !== 'undefined');
@@ -95,187 +214,149 @@ export default async function handler({ req, res, log, error }) {
       return [String(data).trim()].filter(item => item && item !== '' && item !== 'null' && item !== 'undefined');
     };
 
-    // 🔹 CORRECTION OPTIMISÉE DES MEMBRES
-    const formattedMembers = members.map(member => {
-      // 🔹 Nettoyage des spécialités et compétences
-      const memberSpecialties = cleanArray(member.specialties, 'specialties');
-      const memberSkills = cleanArray(member.skills, 'skills');
+    // 🔹 EXÉCUTION DES OPÉRATIONS
+    switch (operation) {
+      case 'create':
+        const dataToInsert = cleanData(data, collection);
+        result = await collectionObj.insertOne(dataToInsert);
+        mongoId = result.insertedId;
+        log(`✅ Document créé dans ${collection} - ID: ${mongoId}`);
+        break;
 
-      // 🔹 Correction des URLs de photos
-      let photoUrl = member.photo || '';
-      if (photoUrl && photoUrl.startsWith('../assets/photos/')) {
-        photoUrl = photoUrl.replace('../assets/photos/', '/assets/photos/');
-      }
+      case 'update':
+        if (!id) {
+          throw new Error("ID du document requis pour la mise à jour");
+        }
 
-      // 🔹 Structure finale du membre
-      return {
-        _id: member._id?.toString(),
-        name: member.name || '',
-        title: member.title || '',
-        email: member.email || '',
-        phone: member.phone || '',
+        const updateData = cleanData(data, collection);
+        result = await collectionObj.updateOne(
+          { _id: new ObjectId(id) },
+          { $set: updateData }
+        );
+
+        mongoId = id;
+        log(`✅ Document mis à jour dans ${collection} - ID: ${id} - Modifications: ${result.modifiedCount}`);
+        break;
+
+      case 'upsert':
+        const upsertData = cleanData(data, collection);
+        const upsertFilter = id ? { _id: new ObjectId(id) } : filter;
         
-        // 🔹 CHAMPS CORRIGÉS
-        specialties: memberSpecialties,
-        skills: memberSkills,
-        
-        location: member.location || '',
-        organization: member.organization || '',
-        entreprise: member.entreprise || '',
-        experienceYears: member.experienceYears || 0,
-        projects: member.projects || '',
-        availability: member.availability || '',
-        statutMembre: member.statutMembre || 'Actif',
-        photo: photoUrl,
-        cvLink: member.cvLink || '',
-        linkedin: member.linkedin || '',
-        isActive: member.isActive !== undefined ? member.isActive : true,
-        createdAt: member.createdAt,
-        updatedAt: member.updatedAt
-      };
-    });
+        if (Object.keys(upsertFilter).length === 0) {
+          // Si pas de filtre, utiliser un identifiant unique selon la collection
+          const uniqueField = getUniqueField(collection, upsertData);
+          if (uniqueField) {
+            upsertFilter[uniqueField] = upsertData[uniqueField];
+          }
+        }
 
-    // 🔹 STATISTIQUES DÉTAILLÉES
-    const stats = {
-      membersWithSpecialties: formattedMembers.filter(m => m.specialties.length > 0).length,
-      membersWithSkills: formattedMembers.filter(m => m.skills.length > 0).length,
-      membersWithBoth: formattedMembers.filter(m => m.specialties.length > 0 && m.skills.length > 0).length,
-      totalSpecialties: [...new Set(formattedMembers.flatMap(m => m.specialties))].length,
-      totalSkills: [...new Set(formattedMembers.flatMap(m => m.skills))].length
-    };
+        if (Object.keys(upsertFilter).length === 0) {
+          throw new Error("Impossible de déterminer le filtre pour l'upsert");
+        }
 
-    log("🎯 STATISTIQUES FINALES:", stats);
+        result = await collectionObj.updateOne(
+          upsertFilter,
+          { 
+            $set: { ...upsertData, updatedAt: new Date() },
+            $setOnInsert: { createdAt: new Date() }
+          },
+          { upsert: true }
+        );
 
-    // 🔹 Formater les autres collections
-    const formatCollection = (collection, mapper) => 
-      collection.map(mapper).filter(item => item !== null);
+        mongoId = result.upsertedId || id;
+        log(`✅ Upsert dans ${collection} - ID: ${mongoId} - Created: ${!!result.upsertedId}`);
+        break;
 
-    const formattedProjects = formatCollection(projects, project => ({
-      _id: project._id?.toString(),
-      title: project.title || 'Sans titre',
-      description: project.description || '',
-      members: project.members ? project.members.map(m => m?.toString()) : [],
-      status: project.status || 'idea',
-      organization: project.organization || '',
-      tags: Array.isArray(project.tags) ? project.tags : [],
-      createdAt: project.createdAt || new Date(),
-      importedFromMember: project.importedFromMember || false,
-      memberSource: project.memberSource || ''
-    }));
+      case 'delete':
+        if (!id && Object.keys(filter).length === 0) {
+          throw new Error("ID ou filtre requis pour la suppression");
+        }
 
-    const formattedGroups = formatCollection(groups, group => ({
-      _id: group._id?.toString(),
-      name: group.name || '',
-      description: group.description || '',
-      type: group.type || 'technique',
-      privacy: group.privacy || 'public',
-      tags: Array.isArray(group.tags) ? group.tags : [],
-      members: group.members ? group.members.map(m => m?.toString()) : [],
-      leader: group.leader?.toString() || null,
-      memberCount: group.members ? group.members.length : 0
-    }));
+        const deleteFilter = id ? { _id: new ObjectId(id) } : filter;
+        result = await collectionObj.deleteOne(deleteFilter);
+        log(`✅ Document supprimé de ${collection} - Suppressions: ${result.deletedCount}`);
+        break;
 
-    const formattedAnalyses = formatCollection(analyses, analysis => ({
-      _id: analysis._id?.toString(),
-      type: analysis.type || 'interaction_analysis',
-      title: analysis.title || '',
-      description: analysis.description || '',
-      insights: analysis.insights || {},
-      suggestions: Array.isArray(analysis.suggestions) ? analysis.suggestions : [],
-      statistics: analysis.statistics || {},
-      status: analysis.status || 'completed',
-      analysisTimestamp: analysis.analysisTimestamp || analysis.createdAt
-    }));
+      case 'bulk':
+        if (!bulkData || !Array.isArray(bulkData) || bulkData.length === 0) {
+          throw new Error("Données bulk manquantes ou invalides");
+        }
 
-    const formattedSkills = formatCollection(skills, skill => ({
-      _id: skill._id?.toString(),
-      name: skill.name || '',
-      category: skill.category || 'technique',
-      description: skill.description || '',
-      memberCount: skill.memberCount || 0
-    }));
+        const bulkOperations = bulkData.map(item => {
+          const cleanedItem = cleanData(item.data || item, collection);
+          const itemFilter = item.id ? { _id: new ObjectId(item.id) } : item.filter || {};
+          
+          if (Object.keys(itemFilter).length === 0) {
+            const uniqueField = getUniqueField(collection, cleanedItem);
+            if (uniqueField) {
+              itemFilter[uniqueField] = cleanedItem[uniqueField];
+            }
+          }
 
-    const formattedSpecialties = formatCollection(specialties, specialty => ({
-      _id: specialty._id?.toString(),
-      name: specialty.name || '',
-      category: specialty.category || 'technique',
-      description: specialty.description || '',
-      memberCount: specialty.memberCount || 0
-    }));
+          return {
+            updateOne: {
+              filter: itemFilter,
+              update: { 
+                $set: { ...cleanedItem, updatedAt: new Date() },
+                $setOnInsert: { createdAt: new Date() }
+              },
+              upsert: true
+            }
+          };
+        });
 
-    const formattedInteractions = formatCollection(interactions, interaction => ({
-      _id: interaction._id?.toString(),
-      type: interaction.type || 'message',
-      title: interaction.title || '',
-      description: interaction.description || '',
-      from: interaction.from?.toString() || '',
-      to: interaction.to ? interaction.to.map(t => t?.toString()) : [],
-      projects: interaction.projects ? interaction.projects.map(p => p?.toString()) : [],
-      status: interaction.status || 'pending',
-      participantCount: 1 + (interaction.to ? interaction.to.length : 0)
-    }));
+        result = await collectionObj.bulkWrite(bulkOperations);
+        log(`✅ Bulk operation dans ${collection} - Upserted: ${result.upsertedCount}, Modified: ${result.modifiedCount}`);
+        break;
+
+      default:
+        throw new Error(`Opération non supportée: ${operation}`);
+    }
 
     await client.close();
 
-    // 🔹 RÉPONSE FINALE OPTIMISÉE
     return res.json({
       success: true,
-      
-      // Format principal pour compatibilité
-      projects: formattedProjects,
-      members: formattedMembers,
-      
-      // Structure complète
-      data: {
-        members: formattedMembers,
-        projects: formattedProjects,
-        groups: formattedGroups,
-        analyses: formattedAnalyses,
-        skills: formattedSkills,
-        specialties: formattedSpecialties,
-        interactions: formattedInteractions
+      operation,
+      collection,
+      mongoId: mongoId?.toString(),
+      result: {
+        insertedId: result.insertedId?.toString(),
+        modifiedCount: result.modifiedCount,
+        deletedCount: result.deletedCount,
+        upsertedCount: result.upsertedCount,
+        upsertedId: result.upsertedId?.toString()
       },
-      
-      // Métadonnées enrichies
-      metadata: {
-        totals: {
-          members: formattedMembers.length,
-          projects: formattedProjects.length,
-          groups: formattedGroups.length,
-          analyses: formattedAnalyses.length,
-          skills: formattedSkills.length,
-          specialties: formattedSpecialties.length,
-          interactions: formattedInteractions.length
-        },
-        skillsStats: stats,
-        collectionErrors: errors.length,
-        timestamp: new Date().toISOString(),
-        database: DB_NAME
-      },
-      
-      // Échantillons pour debug (seulement en développement)
-      ...(process.env.NODE_ENV === 'development' && {
-        debug: {
-          membersSample: formattedMembers.slice(0, 2).map(m => ({
-            name: m.name,
-            specialties: m.specialties,
-            skills: m.skills
-          })),
-          skillsSample: formattedSkills.slice(0, 3),
-          specialtiesSample: formattedSpecialties.slice(0, 3)
-        }
-      }),
-      
-      message: `Données chargées: ${formattedMembers.length} membres (${stats.membersWithSpecialties} avec spécialités, ${stats.membersWithSkills} avec compétences)`
+      timestamp: new Date().toISOString(),
+      message: `Opération ${operation} réussie sur la collection ${collection}`
     });
 
   } catch (err) {
-    error("❌ Erreur critique: " + err.message);
+    error(`❌ Erreur synchronisation ${collection}: ${err.message}`);
     if (client) await client.close();
+    
     return res.json({ 
       success: false, 
-      message: "Erreur lors du chargement des données",
-      error: process.env.NODE_ENV === 'development' ? err.message : 'Contactez l\'administrateur'
+      operation,
+      collection,
+      message: `Erreur lors de la synchronisation ${collection}: ${err.message}`,
+      error: process.env.NODE_ENV === 'development' ? err.stack : undefined
     });
   }
+}
+
+// 🔹 FONCTION POUR DÉTERMINER LE CHAMP UNIQUE PAR COLLECTION
+function getUniqueField(collection, data) {
+  const uniqueFields = {
+    'members': 'email',
+    'projects': 'title', 
+    'groups': 'name',
+    'analyses': 'title',
+    'interactions': 'title',
+    'skills': 'name',
+    'specialties': 'name'
+  };
+  
+  const field = uniqueFields[collection];
+  return field && data[field] ? field : null;
 }
