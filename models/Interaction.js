@@ -1,123 +1,110 @@
-const mongoose = require('mongoose');
-const Schema = mongoose.Schema;
 
-const InteractionSchema = new Schema({
+// models/Interaction.js - VERSION SIMPLIFIÉE
+const mongoose = require('mongoose');
+
+const interactionSchema = new mongoose.Schema({
   type: {
     type: String,
-    enum: [
-      'message', 
-      'match_request', 
-      'mentorship', 
-      'project_invite', 
-      'external_request',
-      'collaboration',
-      'expertise_share',
-      'project_review',
-      'strategic_meeting',
-      'knowledge_transfer',
-      // 💡 AJOUT : Types pour les suggestions de l'IA et le monitoring
-      'collaboration_suggested', 
-      'project_suggested', 
-      'internal_monitoring'
-    ],
     required: true,
-    comment: 'Type d\'interaction'
+    enum: [
+      'collaboration',
+      'mentorship', 
+      'project_invite',
+      'expertise_share',
+      'knowledge_transfer'
+    ],
+    default: 'collaboration'
   },
+  
   title: {
     type: String,
-    required: true, // 🚨 Ce champ doit être fourni dans la requête POST
-    comment: 'Titre de l\'interaction'
+    required: true,
+    trim: true
   },
+  
   description: {
     type: String,
-    comment: 'Description détaillée'
+    default: ''
   },
-  // Référence unique pour l'initiateur
+  
+  // Références principales
   from: { 
-    type: Schema.Types.ObjectId, 
+    type: mongoose.Schema.Types.ObjectId, 
     ref: 'Member', 
-    required: true // 🚨 Ce champ doit être fourni dans la requête POST
+    required: true 
   },
-  // Références multiples pour les destinataires (Member B dans l'analyse)
+  
   to: [{ 
-    type: Schema.Types.ObjectId, 
+    type: mongoose.Schema.Types.ObjectId, 
     ref: 'Member' 
   }],
-  // Références aux projets concernés
+  
   projects: [{ 
-    type: Schema.Types.ObjectId, 
+    type: mongoose.Schema.Types.ObjectId, 
     ref: 'Project' 
   }],
-  // Références aux groupes concernés
+  
   groups: [{ 
-    type: Schema.Types.ObjectId, 
+    type: mongoose.Schema.Types.ObjectId, 
     ref: 'Group' 
   }],
-  // Références aux spécialités concernées
+  
   specialties: [{ 
-    type: Schema.Types.ObjectId, 
+    type: mongoose.Schema.Types.ObjectId, 
     ref: 'Specialty' 
   }],
   
-  // NOUVEAUX CHAMPS (existant mais mis à jour pour clarté)
+  // Statut simplifié
   status: {
     type: String,
-    enum: ['pending', 'accepted', 'rejected', 'completed', 'canceled'],
-    default: 'pending',
-    comment: 'Statut de l\'interaction ou de la suggestion'
+    enum: ['pending', 'accepted', 'completed', 'canceled'],
+    default: 'pending'
   },
-  category: {
-    type: String,
-    enum: ['personal', 'project', 'group', 'strategic', 'ai_suggestion', 'manual'], // 💡 AJOUT: ai_suggestion
-    default: 'manual'
+  
+  // Métriques pour l'analyse
+  intensity: {
+    type: Number,
+    min: 1,
+    max: 10,
+    default: 5
   },
-  // Métadonnées pour l'analyse IA
-  ai_analysis: {
-    strategic_value: Number,
-    recommended_actions: [String],
-    risk_level: {
-      type: String,
-      enum: ['low', 'medium', 'high']
-    },
-    success_probability: Number,
-    last_analyzed: Date
+  
+  duration: {
+    type: Number, // en minutes
+    default: 0
+  },
+  
+  score: {
+    type: Number,
+    min: 1,
+    max: 5,
+    default: 3
   }
-}, { 
+
+}, {
   timestamps: true,
   toJSON: { virtuals: true },
   toObject: { virtuals: true }
 });
 
-// Index pour optimiser les recherches
-InteractionSchema.index({ from: 1 });
-InteractionSchema.index({ to: 1 });
-InteractionSchema.index({ status: 1 });
-InteractionSchema.index({ category: 1 });
-InteractionSchema.index({ 'payload.priority': 1 });
-InteractionSchema.index({ 'ai_analysis.strategic_value': -1 });
-InteractionSchema.index({ createdAt: -1 });
+// Index optimisés
+interactionSchema.index({ from: 1, createdAt: -1 });
+interactionSchema.index({ to: 1 });
+interactionSchema.index({ status: 1 });
+interactionSchema.index({ type: 1 });
 
-// Virtual pour le nombre total de participants
-InteractionSchema.virtual('participantCount').get(function() {
-  // L'initiateur ('from') est toujours là (1), plus les destinataires ('to')
-  return 1 + (this.to ? this.to.length : 0); 
+// Virtual pour le nombre de participants
+interactionSchema.virtual('participantCount').get(function() {
+  return 1 + (this.to ? this.to.length : 0);
 });
 
-// Méthode pour marquer comme analysé par l'IA
-InteractionSchema.methods.markAsAnalyzed = function(analysisData) {
-  this.ai_analysis = {
-    ...analysisData,
-    last_analyzed: new Date()
-  };
-  return this.save();
+// Méthode pour les interactions récentes
+interactionSchema.statics.getRecentInteractions = function(limit = 50) {
+  return this.find()
+    .populate('from', 'name title organization')
+    .populate('to', 'name title organization')
+    .sort({ createdAt: -1 })
+    .limit(limit);
 };
 
-// Méthode statique pour les interactions stratégiques
-InteractionSchema.statics.getStrategicInteractions = function() {
-  return this.find({ 
-    category: 'strategic',
-    status: { $in: ['pending', 'accepted'] } 
-  }).sort({ createdAt: -1 });
-};
-
-module.exports = mongoose.model('Interaction', InteractionSchema);
+module.exports = mongoose.model('Interaction', interactionSchema);
