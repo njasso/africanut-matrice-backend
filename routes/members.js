@@ -1,4 +1,4 @@
-// routes/members.js - VERSION COMPLÈTEMENT CORRIGÉE
+// routes/members.js - VERSION CORRIGÉE
 const express = require("express");
 const axios = require("axios");
 const router = express.Router();
@@ -18,10 +18,10 @@ router.use((req, res, next) => {
 });
 
 // ==========================
-// ROUTES PRINCIPALES CORRIGÉES
+// ROUTES PRINCIPALES
 // ==========================
 
-// 🔹 GET tous les membres depuis AppWrite - VERSION CORRIGÉE
+// 🔹 GET tous les membres depuis AppWrite
 router.get("/", async (req, res) => {
   try {
     console.log("🔍 Route /members - Récupération depuis AppWrite");
@@ -35,33 +35,30 @@ router.get("/", async (req, res) => {
       status 
     } = req.query;
 
-    // 🔥 CORRECTION : Appel AppWrite avec payload correct
-    const appwriteResponse = await callAppWriteFunction({
-      path: '/api/v1/all-data/matrix-data',
-      method: 'GET'
-    });
+    // Appel de la fonction AppWrite
+    const appwriteResponse = await callAppWriteFunction();
     
-    console.log("📦 Réponse AppWrite brute:", {
-      success: appwriteResponse.success,
-      hasData: !!appwriteResponse.data,
-      dataKeys: appwriteResponse.data ? Object.keys(appwriteResponse.data) : 'no-data'
-    });
-
-    let allMembers = [];
-    let source = 'appwrite';
-
-    if (appwriteResponse.success && appwriteResponse.data) {
-      allMembers = appwriteResponse.data.members || [];
-      console.log(`✅ ${allMembers.length} membres reçus d'AppWrite`);
-    } else {
-      console.log("❌ Erreur AppWrite, utilisation mode démo");
-      allMembers = getDemoData();
-      source = 'demo';
+    if (!appwriteResponse.success) {
+      return res.status(500).json({
+        success: false,
+        message: "Erreur AppWrite: " + (appwriteResponse.message || 'Unknown error'),
+        appwriteError: appwriteResponse
+      });
     }
+
+    let allMembers = appwriteResponse.data?.members || [];
+    
+    console.log(`📊 ${allMembers.length} membres reçus d'AppWrite`);
 
     // 🔹 NORMALISATION COMPLÈTE DES DONNÉES
     const normalizedMembers = normalizeMemberData(allMembers);
     console.log(`🔄 ${normalizedMembers.length} membres normalisés`);
+
+    // Si pas de données, mode démo
+    if (normalizedMembers.length === 0) {
+      console.log("🔄 Aucune donnée reçue, activation mode démonstration");
+      normalizedMembers = getDemoData();
+    }
 
     // 🔍 FILTRAGE LOCAL
     let filteredMembers = filterMembers(normalizedMembers, { search, specialty, location, status });
@@ -78,12 +75,8 @@ router.get("/", async (req, res) => {
       page: parseInt(page),
       limit: parseInt(limit),
       totalPages: Math.ceil(filteredMembers.length / parseInt(limit)),
-      source: source,
-      filters: { search, specialty, location, status },
-      metadata: {
-        normalizedCount: normalizedMembers.length,
-        filteredCount: filteredMembers.length
-      }
+      source: allMembers.length > 0 ? 'appwrite' : 'demo',
+      filters: { search, specialty, location, status }
     });
 
   } catch (err) {
@@ -97,47 +90,38 @@ router.get("/", async (req, res) => {
   }
 });
 
-// 🔹 GET un membre par ID - VERSION CORRIGÉE
+// 🔹 GET un membre par ID
 router.get("/:id", async (req, res) => {
   try {
     console.log("🔍 Récupération membre ID:", req.params.id);
     
-    const appwriteResponse = await callAppWriteFunction({
-      path: '/api/v1/all-data/matrix-data',
-      method: 'GET'
-    });
+    const appwriteResponse = await callAppWriteFunction();
     
-    let allMembers = [];
-    let source = 'appwrite';
-
-    if (appwriteResponse.success && appwriteResponse.data) {
-      allMembers = appwriteResponse.data.members || [];
-    } else {
-      allMembers = getDemoData();
-      source = 'demo';
+    if (!appwriteResponse.success) {
+      return res.status(500).json({
+        success: false,
+        message: "Erreur AppWrite",
+        appwriteError: appwriteResponse
+      });
     }
 
+    const allMembers = appwriteResponse.data?.members || [];
+    
     // 🔹 NORMALISATION AVANT RECHERCHE
     const normalizedMembers = normalizeMemberData(allMembers);
-    const member = normalizedMembers.find(m => 
-      m._id === req.params.id || 
-      m.id === req.params.id ||
-      (m._id && m._id.toString() === req.params.id)
-    );
+    const member = normalizedMembers.find(m => m._id === req.params.id || m.id === req.params.id);
 
     if (!member) {
       return res.status(404).json({ 
         success: false, 
-        message: "Membre non trouvé",
-        searchedId: req.params.id,
-        availableIds: normalizedMembers.slice(0, 5).map(m => m._id)
+        message: "Membre non trouvé" 
       });
     }
 
     res.json({ 
       success: true, 
       data: member,
-      source: source
+      source: 'appwrite'
     });
 
   } catch (err) {
@@ -150,34 +134,22 @@ router.get("/:id", async (req, res) => {
   }
 });
 
-// 🔹 GET toutes les collections - VERSION CORRIGÉE
+// 🔹 GET toutes les collections
 router.get("/collections/all", async (req, res) => {
   try {
     console.log("🗂️ Récupération de toutes les collections");
 
-    const appwriteResponse = await callAppWriteFunction({
-      path: '/api/v1/all-data/matrix-data',
-      method: 'GET'
-    });
+    const appwriteResponse = await callAppWriteFunction();
     
-    let allData = {};
-    let source = 'appwrite';
-
-    if (appwriteResponse.success && appwriteResponse.data) {
-      allData = appwriteResponse.data;
-    } else {
-      // Données de démonstration complètes
-      allData = {
-        members: getDemoData(),
-        projects: getDemoProjects(),
-        groups: getDemoGroups(),
-        analyses: [],
-        interactions: [],
-        skills: [],
-        specialties: []
-      };
-      source = 'demo';
+    if (!appwriteResponse.success) {
+      return res.status(500).json({
+        success: false,
+        message: "Erreur AppWrite",
+        appwriteError: appwriteResponse
+      });
     }
+
+    const allData = appwriteResponse.data || {};
     
     // 🔹 NORMALISATION DES MEMBRES DANS LES COLLECTIONS
     if (allData.members && Array.isArray(allData.members)) {
@@ -198,8 +170,7 @@ router.get("/collections/all", async (req, res) => {
       collections: Object.keys(allData),
       statistics: stats,
       totalCollections: Object.keys(allData).length,
-      source: source,
-      timestamp: new Date().toISOString()
+      source: 'appwrite'
     });
 
   } catch (err) {
@@ -213,197 +184,127 @@ router.get("/collections/all", async (req, res) => {
 });
 
 // ==========================
-// FONCTIONS UTILITAIRES COMPLÈTEMENT CORRIGÉES
+// FONCTIONS UTILITAIRES CORRIGÉES
 // ==========================
 
-// 🔹 FONCTION APPWRITE CORRIGÉE
-async function callAppWriteFunction(requestData = {}) {
-  try {
-    console.log("🔄 Appel de la fonction AppWrite...");
-    
-    const appwriteUrl = `${APPWRITE_CONFIG.ENDPOINT}/functions/${APPWRITE_CONFIG.FUNCTION_ID}/executions`;
-    
-    // 🔥 CORRECTION : Payload correct pour AppWrite
-    const payload = {
-      data: JSON.stringify({
-        path: requestData.path || '/api/v1/all-data/matrix-data',
-        method: requestData.method || 'GET',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body: requestData.body || null
-      })
-    };
-
-    const requestConfig = {
-      headers: {
-        'Content-Type': 'application/json',
-        'X-Appwrite-Project': APPWRITE_CONFIG.PROJECT_ID,
-      },
-      timeout: 30000
-    };
-
-    if (APPWRITE_CONFIG.API_KEY) {
-      requestConfig.headers['X-Appwrite-Key'] = APPWRITE_CONFIG.API_KEY;
-    }
-
-    console.log("📤 Envoi à AppWrite:", { 
-      url: appwriteUrl,
-      payload: payload 
-    });
-
-    const response = await axios.post(appwriteUrl, payload, requestConfig);
-
-    console.log("✅ Réponse AppWrite - Status:", response.status);
-
-    let responseBody;
-
-    // 🔥 CORRECTION : Extraction robuste des données
-    if (response.data && response.data.responseBody) {
-      // Cas 1: Données dans responseBody
-      responseBody = typeof response.data.responseBody === 'string' 
-        ? JSON.parse(response.data.responseBody) 
-        : response.data.responseBody;
-    } else if (response.data && response.data.response) {
-      // Cas 2: Données dans response
-      responseBody = typeof response.data.response === 'string' 
-        ? JSON.parse(response.data.response) 
-        : response.data.response;
-    } else {
-      // Cas 3: Données directes
-      responseBody = response.data;
-    }
-
-    console.log("📦 Réponse AppWrite traitée:", {
-      success: responseBody.success,
-      dataKeys: responseBody.data ? Object.keys(responseBody.data) : 'no-data',
-      membersCount: responseBody.data?.members?.length || 0,
-      message: responseBody.message
-    });
-
-    return responseBody;
-
-  } catch (err) {
-    console.error("❌ Erreur appel AppWrite:", {
-      message: err.message,
-      code: err.code,
-      status: err.response?.status,
-      statusText: err.response?.statusText,
-      data: err.response?.data
-    });
-
-    return {
-      success: false,
-      message: "Erreur de connexion à AppWrite",
-      error: err.message,
-      code: err.code,
-      status: err.response?.status
-    };
-  }
-}
-
-// 🔹 FONCTION DE NORMALISATION ULTRA-ROBUSTE
+// 🔹 FONCTION DE NORMALISATION CORRIGÉE
 function normalizeMemberData(members) {
-  if (!Array.isArray(members)) {
-    console.log("⚠️ normalizeMemberData: input n'est pas un tableau");
-    return [];
-  }
+  if (!Array.isArray(members)) return [];
 
-  return members.map((member, index) => {
-    try {
-      if (!member || typeof member !== 'object') {
-        console.log(`⚠️ Membre ${index} invalide:`, member);
-        return createFallbackMember(index);
+  return members.map(member => {
+    console.log('🔍 Normalisation membre:', { 
+      name: member.name, 
+      specialties: member.specialties,
+      skills: member.skills,
+      types: {
+        specialties: typeof member.specialties,
+        skills: typeof member.skills
       }
+    });
 
-      // 🔹 CONVERSION DES SPÉCIALITÉS
-      let specialties = [];
-      if (Array.isArray(member.specialties)) {
-        specialties = member.specialties
-          .map(spec => {
-            if (spec === null || spec === undefined) return null;
-            return String(spec).trim();
-          })
-          .filter(spec => spec && spec !== '' && spec !== 'null' && spec !== 'undefined');
-      } else if (typeof member.specialties === 'string') {
-        specialties = member.specialties
-          .split(/[,;|]/)
-          .map(spec => spec.trim())
-          .filter(spec => spec && spec !== '' && spec !== 'null' && spec !== 'undefined');
-      }
+    // 🔹 CONVERSION DES SPÉCIALITÉS
+    let specialties = [];
+    if (Array.isArray(member.specialties)) {
+      // Déjà un tableau - on nettoie
+      specialties = member.specialties
+        .map(spec => {
+          if (typeof spec === 'string') return spec.trim();
+          return String(spec).trim();
+        })
+        .filter(spec => spec && spec !== '' && spec !== 'null' && spec !== 'undefined');
+    } else if (typeof member.specialties === 'string') {
+      // String à convertir en tableau
+      specialties = member.specialties
+        .split(/[,;|]/) // Séparateurs: virgule, point-virgule, pipe
+        .map(spec => spec.trim())
+        .filter(spec => spec && spec !== '' && spec !== 'null' && spec !== 'undefined');
+    }
+    // Si undefined/null, reste tableau vide
 
-      // 🔹 CONVERSION DES COMPÉTENCES
-      let skills = [];
-      if (Array.isArray(member.skills)) {
-        skills = member.skills
-          .map(skill => {
-            if (skill === null || skill === undefined) return null;
-            return String(skill).trim();
-          })
-          .filter(skill => skill && skill !== '' && skill !== 'null' && skill !== 'undefined');
-      } else if (typeof member.skills === 'string') {
-        skills = member.skills
-          .split(/[,;|]/)
-          .map(skill => skill.trim())
-          .filter(skill => skill && skill !== '' && skill !== 'null' && skill !== 'undefined');
-      }
+    // 🔹 CONVERSION DES COMPÉTENCES
+    let skills = [];
+    if (Array.isArray(member.skills)) {
+      skills = member.skills
+        .map(skill => {
+          if (typeof skill === 'string') return skill.trim();
+          return String(skill).trim();
+        })
+        .filter(skill => skill && skill !== '' && skill !== 'null' && skill !== 'undefined');
+    } else if (typeof member.skills === 'string') {
+      skills = member.skills
+        .split(/[,;|]/)
+        .map(skill => skill.trim())
+        .filter(skill => skill && skill !== '' && skill !== 'null' && skill !== 'undefined');
+    }
 
-      // 🔹 CORRECTION PHOTO
-      let photoUrl = member.photo || '';
-      if (photoUrl && photoUrl.startsWith('../assets/photos/')) {
+    // 🔹 CORRECTION DU CHEMIN DE LA PHOTO
+    let photoUrl = member.photo || '';
+    if (photoUrl) {
+      // Correction des chemins relatifs
+      if (photoUrl.startsWith('../assets/photos/')) {
         photoUrl = photoUrl.replace('../assets/photos/', '/assets/photos/');
       }
-
-      const normalizedMember = {
-        // Identifiant
-        _id: member._id || member.id || generateId(),
-        
-        // Informations personnelles
-        name: String(member.name || '').trim() || 'Nom non renseigné',
-        title: String(member.title || '').trim() || 'Titre non renseigné',
-        email: String(member.email || '').trim(),
-        phone: String(member.phone || '').trim(),
-        location: String(member.location || '').trim(),
-        
-        // 🔹 TABLEAUX CORRIGÉS
-        specialties: specialties,
-        skills: skills,
-        
-        // Organisation
-        organization: String(member.organization || member.entreprise || '').trim(),
-        entreprise: String(member.entreprise || member.organization || '').trim(),
-        
-        // Expérience et projets
-        experienceYears: parseInt(member.experienceYears) || 0,
-        projects: String(member.projects || '').trim(),
-        bio: String(member.bio || member.projects || '').trim(),
-        
-        // Statut
-        statutMembre: member.statutMembre || 'Actif',
-        
-        // Fichiers et liens
-        photo: photoUrl,
-        cvLink: member.cvLink || '',
-        linkedin: member.linkedin || '',
-        
-        // Métadonnées
-        isActive: member.isActive !== undefined ? member.isActive : true,
-        availability: member.availability || ''
-      };
-
-      return normalizedMember;
-
-    } catch (memberError) {
-      console.error(`❌ Erreur normalisation membre ${index}:`, memberError);
-      return createFallbackMember(index);
+      // Ajouter le domaine si chemin relatif
+      if (photoUrl.startsWith('/') && !photoUrl.startsWith('//')) {
+        photoUrl = `${process.env.BASE_URL || ''}${photoUrl}`;
+      }
     }
-  }).filter(member => member !== null);
+
+    // 🔹 ORGANISATION/ENTREPRISE
+    const organization = member.organization || member.entreprise || '';
+    const entreprise = member.entreprise || member.organization || '';
+
+    const normalizedMember = {
+      // Identifiant
+      _id: member._id || member.id || generateId(),
+      
+      // Informations personnelles
+      name: member.name?.trim() || '',
+      title: member.title?.trim() || '',
+      email: member.email?.trim() || '',
+      phone: member.phone?.trim() || '',
+      location: member.location?.trim() || '',
+      
+      // 🔹 TABLEAUX CORRIGÉS
+      specialties: specialties,
+      skills: skills,
+      
+      // Organisation
+      organization: organization,
+      entreprise: entreprise,
+      
+      // Expérience et projets
+      experienceYears: parseInt(member.experienceYears) || 0,
+      projects: member.projects?.trim() || '',
+      bio: member.bio?.trim() || member.projects?.trim() || '', // Fallback sur projects si pas de bio
+      
+      // Statut
+      statutMembre: member.statutMembre || 'Actif',
+      
+      // Fichiers et liens
+      photo: photoUrl,
+      cvLink: member.cvLink || '',
+      linkedin: member.linkedin || '',
+      
+      // Métadonnées
+      isActive: member.isActive !== undefined ? member.isActive : true,
+      availability: member.availability || ''
+    };
+
+    console.log('✅ Membre normalisé:', {
+      name: normalizedMember.name,
+      specialties: normalizedMember.specialties,
+      skills: normalizedMember.skills,
+      specialtiesCount: normalizedMember.specialties.length,
+      skillsCount: normalizedMember.skills.length
+    });
+
+    return normalizedMember;
+  });
 }
 
 // 🔹 FONCTION DE FILTRAGE CORRIGÉE
 function filterMembers(members, filters) {
-  if (!Array.isArray(members)) return [];
-  
   let filtered = [...members];
   const { search, specialty, location, status } = filters;
 
@@ -414,8 +315,8 @@ function filterMembers(members, filters) {
         ${member.name || ''}
         ${member.title || ''}
         ${member.email || ''}
-        ${Array.isArray(member.specialties) ? member.specialties.join(' ') : ''}
-        ${Array.isArray(member.skills) ? member.skills.join(' ') : ''}
+        ${member.specialties?.join(' ') || ''}
+        ${member.skills?.join(' ') || ''}
         ${member.location || ''}
         ${member.organization || ''}
         ${member.entreprise || ''}
@@ -429,10 +330,10 @@ function filterMembers(members, filters) {
   if (specialty && specialty.trim()) {
     const specialtyTerm = specialty.trim().toLowerCase();
     filtered = filtered.filter(member => {
-      return Array.isArray(member.specialties) && 
-        member.specialties.some(spec => 
-          spec && spec.toLowerCase().includes(specialtyTerm)
-        );
+      // Vérifie dans le tableau des spécialités
+      return member.specialties?.some(spec => 
+        spec && spec.toLowerCase().includes(specialtyTerm)
+      );
     });
   }
 
@@ -454,28 +355,74 @@ function filterMembers(members, filters) {
   return filtered;
 }
 
-// 🔹 FONCTIONS DE FALLBACK ET DÉMO
-function createFallbackMember(index) {
-  return {
-    _id: `fallback-${index}-${generateId()}`,
-    name: `Membre ${index + 1}`,
-    title: 'Information manquante',
-    specialties: [],
-    skills: [],
-    statutMembre: 'Inactif',
-    organization: '',
-    isActive: false
-  };
+// 🔹 FONCTION APPWRITE (inchangée)
+async function callAppWriteFunction() {
+  try {
+    console.log("🔄 Appel de la fonction AppWrite...");
+    
+    const appwriteUrl = `${APPWRITE_CONFIG.ENDPOINT}/functions/${APPWRITE_CONFIG.FUNCTION_ID}/executions`;
+    
+    const requestConfig = {
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Appwrite-Project': APPWRITE_CONFIG.PROJECT_ID,
+      },
+      timeout: 25000
+    };
+
+    if (APPWRITE_CONFIG.API_KEY) {
+      requestConfig.headers['X-Appwrite-Key'] = APPWRITE_CONFIG.API_KEY;
+    }
+
+    const response = await axios.post(appwriteUrl, {}, requestConfig);
+
+    console.log("✅ Réponse AppWrite - Status:", response.status);
+
+    let responseBody;
+    if (response.data.response) {
+      responseBody = typeof response.data.response === 'string' 
+        ? JSON.parse(response.data.response) 
+        : response.data.response;
+    } else {
+      responseBody = response.data;
+    }
+
+    console.log("📦 Structure réponse:", {
+      success: responseBody.success,
+      dataKeys: responseBody.data ? Object.keys(responseBody.data) : 'no data',
+      membersCount: responseBody.data?.members?.length || 0
+    });
+
+    return responseBody;
+
+  } catch (err) {
+    console.error("❌ Erreur appel AppWrite:", {
+      message: err.message,
+      code: err.code,
+      status: err.response?.status,
+      statusText: err.response?.statusText
+    });
+
+    return {
+      success: false,
+      message: "Erreur de connexion à AppWrite",
+      error: err.message,
+      code: err.code,
+      status: err.response?.status
+    };
+  }
 }
 
+// 🔹 GÉNÉRATEUR D'ID FALLBACK
 function generateId() {
-  return Math.random().toString(36).substr(2, 9);
+  return 'id_' + Math.random().toString(36).substr(2, 9);
 }
 
+// 🔹 DONNÉES DE DÉMO CORRIGÉES
 function getDemoData() {
-  return [
+  return normalizeMemberData([
     { 
-      _id: 'demo-1', 
+      _id: '1', 
       name: 'Jean Dupont', 
       specialties: ['Énergie Solaire', 'Smart Grid'], 
       skills: ['Gestion de projet', 'Énergies renouvelables'], 
@@ -484,11 +431,10 @@ function getDemoData() {
       title: 'Ingénieur Senior en Énergie',
       email: 'jean.dupont@energie-cm.com',
       organization: 'Energy Solutions Cameroun',
-      experienceYears: 8,
-      photo: '/assets/photos/jean.jpg'
+      experienceYears: 8
     },
     { 
-      _id: 'demo-2', 
+      _id: '2', 
       name: 'Marie Martin', 
       specialties: ['Environnement', 'Développement Durable'], 
       skills: ['Analyse technique', 'Audit environnemental'], 
@@ -497,148 +443,29 @@ function getDemoData() {
       title: 'Consultante Environnement',
       email: 'marie.martin@eco-consult.com',
       organization: 'EcoConsult Cameroun',
-      experienceYears: 5,
-      photo: '/assets/photos/marie.jpg'
-    },
-    { 
-      _id: 'demo-3', 
-      name: 'Paul Nkodo', 
-      specialties: ['Agro-industrie', 'Sylviculture'], 
-      skills: ['Développement rural', 'Gestion de projets agricoles'], 
-      location: 'Bafoussam', 
-      statutMembre: 'Actif',
-      title: 'Agronome Senior',
-      email: 'paul.nkodo@agro-cm.com',
-      organization: 'AgroTech Cameroun',
-      experienceYears: 12,
-      photo: '/assets/photos/paul.jpg'
+      experienceYears: 5
     }
-  ];
+  ]);
 }
 
-function getDemoProjects() {
-  return [
-    {
-      _id: 'project-1',
-      title: 'Centrale Solaire Rurale',
-      description: 'Installation de mini-centrales solaires dans les zones rurales',
-      status: 'active',
-      organization: 'Energy Solutions Cameroun',
-      members: ['demo-1']
-    }
-  ];
-}
-
-function getDemoGroups() {
-  return [
-    {
-      _id: 'group-1',
-      name: 'Équipe Énergie Renouvelable',
-      description: 'Groupe dédié aux projets énergétiques',
-      type: 'technique',
-      members: ['demo-1', 'demo-2']
-    }
-  ];
-}
-
-// ==========================
-// ROUTES SUPPLEMENTAIRES
-// ==========================
-
-router.get("/stats/summary", async (req, res) => {
-  try {
-    console.log("📊 Récupération des statistiques");
-
-    const appwriteResponse = await callAppWriteFunction({
-      path: '/api/v1/all-data/matrix-data',
-      method: 'GET'
-    });
-    
-    let allMembers = [];
-    let source = 'appwrite';
-
-    if (appwriteResponse.success && appwriteResponse.data) {
-      allMembers = appwriteResponse.data.members || [];
-    } else {
-      allMembers = getDemoData();
-      source = 'demo';
-    }
-
-    const normalizedMembers = normalizeMemberData(allMembers);
-    const stats = calculateStats(normalizedMembers);
-
-    res.json({
-      success: true,
-      stats: stats,
-      source: source,
-      totalMembers: normalizedMembers.length,
-      timestamp: new Date().toISOString()
-    });
-
-  } catch (err) {
-    console.error("❌ Erreur GET /stats/summary:", err);
-    res.status(500).json({ 
-      success: false, 
-      message: "Erreur statistiques", 
-      error: err.message 
-    });
-  }
-});
-
-router.get("/metadata/filters", async (req, res) => {
-  try {
-    console.log("🎯 Récupération des métadonnées filtres");
-
-    const appwriteResponse = await callAppWriteFunction({
-      path: '/api/v1/all-data/matrix-data',
-      method: 'GET'
-    });
-    
-    let allMembers = [];
-
-    if (appwriteResponse.success && appwriteResponse.data) {
-      allMembers = appwriteResponse.data.members || [];
-    } else {
-      allMembers = getDemoData();
-    }
-
-    const normalizedMembers = normalizeMemberData(allMembers);
-    const metadata = extractMetadata(normalizedMembers);
-
-    res.json({
-      success: true,
-      metadata: metadata,
-      totalMembers: normalizedMembers.length,
-      timestamp: new Date().toISOString()
-    });
-
-  } catch (err) {
-    console.error("❌ Erreur GET /metadata/filters:", err);
-    res.status(500).json({ 
-      success: false, 
-      message: "Erreur métadonnées", 
-      error: err.message 
-    });
-  }
-});
-
-// 🔹 CALCUL DES STATISTIQUES
+// 🔹 CALCUL DES STATISTIQUES CORRIGÉ
 function calculateStats(members) {
-  const totalMembers = members.length;
-  const activeMembers = members.filter(m => m.statutMembre === 'Actif').length;
+  const normalizedMembers = normalizeMemberData(members);
+  const totalMembers = normalizedMembers.length;
+  const activeMembers = normalizedMembers.filter(m => m.statutMembre === 'Actif').length;
   
   const locationStats = {};
   const specialtyStats = {};
   const orgStats = {};
 
-  members.forEach(member => {
+  normalizedMembers.forEach(member => {
     // Localisations
     if (member.location) {
       locationStats[member.location] = (locationStats[member.location] || 0) + 1;
     }
 
-    // Spécialités
-    if (Array.isArray(member.specialties)) {
+    // Spécialités (tableau maintenant)
+    if (member.specialties && Array.isArray(member.specialties)) {
       member.specialties.forEach(spec => {
         if (spec) {
           specialtyStats[spec] = (specialtyStats[spec] || 0) + 1;
@@ -672,15 +499,17 @@ function calculateStats(members) {
   };
 }
 
-// 🔹 EXTRACTION DES MÉTADONNÉES
+// 🔹 EXTRACTION DES MÉTADONNÉES CORRIGÉE
 function extractMetadata(members) {
+  const normalizedMembers = normalizeMemberData(members);
   const specialties = new Set();
   const locations = new Set();
   const organizations = new Set();
   const statuses = new Set();
 
-  members.forEach(member => {
-    if (Array.isArray(member.specialties)) {
+  normalizedMembers.forEach(member => {
+    // Spécialités (tableau maintenant)
+    if (member.specialties && Array.isArray(member.specialties)) {
       member.specialties.forEach(spec => spec && specialties.add(spec));
     }
     
@@ -700,15 +529,81 @@ function extractMetadata(members) {
   };
 }
 
-// Routes de debug
+// Routes restantes inchangées...
+router.get("/stats/summary", async (req, res) => {
+  try {
+    console.log("📊 Récupération des statistiques");
+
+    const appwriteResponse = await callAppWriteFunction();
+    
+    let allMembers = [];
+    let source = 'appwrite';
+
+    if (appwriteResponse.success) {
+      allMembers = appwriteResponse.data?.members || [];
+    } else {
+      allMembers = getDemoData();
+      source = 'demo';
+      console.log("🔄 Utilisation des données de démonstration pour les stats");
+    }
+
+    const stats = calculateStats(allMembers);
+
+    res.json({
+      success: true,
+      stats: stats,
+      source: source,
+      totalMembers: allMembers.length
+    });
+
+  } catch (err) {
+    console.error("❌ Erreur GET /stats/summary:", err);
+    res.status(500).json({ 
+      success: false, 
+      message: "Erreur statistiques", 
+      error: err.message 
+    });
+  }
+});
+
+router.get("/metadata/filters", async (req, res) => {
+  try {
+    console.log("🎯 Récupération des métadonnées filtres");
+
+    const appwriteResponse = await callAppWriteFunction();
+    
+    let allMembers = [];
+
+    if (appwriteResponse.success) {
+      allMembers = appwriteResponse.data?.members || [];
+    } else {
+      allMembers = getDemoData();
+    }
+
+    const metadata = extractMetadata(allMembers);
+
+    res.json({
+      success: true,
+      metadata: metadata,
+      totalMembers: allMembers.length
+    });
+
+  } catch (err) {
+    console.error("❌ Erreur GET /metadata/filters:", err);
+    res.status(500).json({ 
+      success: false, 
+      message: "Erreur métadonnées", 
+      error: err.message 
+    });
+  }
+});
+
+// Routes de debug et health check inchangées...
 router.get("/debug/appwrite", async (req, res) => {
   try {
     console.log("🐛 Test connexion AppWrite");
     
-    const result = await callAppWriteFunction({
-      path: '/api/v1/health',
-      method: 'GET'
-    });
+    const result = await callAppWriteFunction();
     
     res.json({
       success: true,
@@ -737,12 +632,10 @@ router.get("/health", (req, res) => {
     success: true,
     message: "API Members opérationnelle",
     timestamp: new Date().toISOString(),
-    version: "2.0.0",
     appwrite: {
       endpoint: APPWRITE_CONFIG.ENDPOINT,
       projectId: APPWRITE_CONFIG.PROJECT_ID,
-      functionId: APPWRITE_CONFIG.FUNCTION_ID,
-      status: 'configured'
+      functionId: APPWRITE_CONFIG.FUNCTION_ID
     }
   });
 });
