@@ -1,4 +1,4 @@
-// server.js - VERSION COMPLÈTEMENT MISE À JOUR POUR SYNERGIES + TOUTES LES COLLECTIONS
+// server.js - VERSION COMPLÈTEMENT MISE À JOUR ET CORRIGÉE
 require('dotenv').config();
 const express = require('express');
 const mongoose = require('mongoose');
@@ -114,9 +114,22 @@ try {
   console.error('❌ Error loading models:', error.message);
 }
 
+// ==================== IMPORT DES ROUTES CORRIGÉES ====================
+
+// 🔥 CORRECTION : Import des routes avec gestion d'erreur
+try {
+  // Routes principales
+  app.use('/api/v1/analyses', require('./routes/analyses'));
+  app.use('/api/v1/interactions', require('./routes/interactions'));
+  app.use('/api/v1/skills', require('./routes/skills'));
+  console.log('✅ All routes loaded successfully');
+} catch (error) {
+  console.warn('⚠️ Some routes not available:', error.message);
+}
+
 // ==================== ROUTE PRINCIPALE POUR APPWRITE ====================
 
-// 🔹 ROUTE POUR EXÉCUTER LES FONCTIONS APPWRITE
+// 🔹 ROUTE POUR EXÉCUTER LES FONCTIONS APPWRITE - CORRIGÉE
 app.post('/api/v1/execute-function', async (req, res) => {
   try {
     const { path, method, body, headers } = req.body;
@@ -125,7 +138,7 @@ app.post('/api/v1/execute-function', async (req, res) => {
     
     let response;
 
-    // Routage vers les handlers appropriés
+    // 🔥 CORRECTION : Routage complet vers les handlers appropriés
     switch (path) {
       case '/api/v1/all-data/matrix-data':
         response = await handleGetAllMatrixData();
@@ -137,6 +150,24 @@ app.post('/api/v1/execute-function', async (req, res) => {
           response = await handleSaveSynergyAnalysis(analysisData);
         } else if (method === 'GET') {
           response = await handleGetSynergyAnalyses();
+        }
+        break;
+      
+      // 🔥 AJOUT : Gestion des routes analyses
+      case '/api/v1/analyses/save-synergy-analysis':
+        if (method === 'POST') {
+          const analysisData = body ? JSON.parse(body) : req.body;
+          response = await handleSaveSynergyAnalysis(analysisData);
+        }
+        break;
+      
+      // 🔥 AJOUT : Gestion des routes interactions
+      case '/api/v1/interactions':
+        if (method === 'GET') {
+          response = await handleGetInteractions();
+        } else if (method === 'POST') {
+          const interactionData = body ? JSON.parse(body) : req.body;
+          response = await handleCreateInteraction(interactionData);
         }
         break;
       
@@ -242,7 +273,7 @@ async function handleGetAllMatrixData() {
   }
 }
 
-// Handler pour sauvegarder une analyse de synergies
+// Handler pour sauvegarder une analyse de synergies - CORRIGÉ
 async function handleSaveSynergyAnalysis(analysisData) {
   try {
     console.log('💾 Handling synergy analysis save...');
@@ -265,17 +296,35 @@ async function handleSaveSynergyAnalysis(analysisData) {
       throw new Error('Analysis model not available');
     }
 
+    // 🔥 CORRECTION : Structure compatible avec le modèle Analysis corrigé
     const newAnalysis = new Analysis({
       type: 'professional_synergy_analysis',
       title: title.trim(),
       description: description?.trim() || `Analyse des synergies professionnelles - ${new Date().toLocaleDateString('fr-FR')}`,
-      analysisData: synergyData,
+      
+      // 🔥 Structure analysisData corrigée
+      analysisData: {
+        synergies: synergyData.synergies || [],
+        projectOpportunities: synergyData.projectOpportunities || [],
+        summary: synergyData.summary || {
+          totalSynergies: synergyData.synergies?.length || 0,
+          highPotentialSynergies: synergyData.synergies?.filter(s => s.potential === 'Élevé' || s.potential === 'Exceptionnel').length || 0,
+          projectOpportunities: synergyData.projectOpportunities?.length || 0,
+          analyzedMembers: statistics?.totalMembers || 0,
+          aiEnhanced: statistics?.aiEnhanced || false,
+          aiAnalysesCount: statistics?.aiEnhancedCount || 0,
+          aiModel: statistics?.aiModel || null
+        },
+        timestamp: timestamp
+      },
+      
       insights: {
         totalSynergies: synergyData.synergies?.length || 0,
-        highPotential: synergyData.synergies?.filter(s => s.potential === 'Élevé').length || 0,
+        highPotential: synergyData.synergies?.filter(s => s.potential === 'Élevé' || s.potential === 'Exceptionnel').length || 0,
         projectOpportunities: synergyData.projectOpportunities?.length || 0,
         analyzedMembers: statistics?.totalMembers || 0
       },
+      
       suggestions: synergyData.synergies?.map(synergy => ({
         members: [synergy.member1?.name, synergy.member2?.name],
         score: synergy.score,
@@ -284,13 +333,32 @@ async function handleSaveSynergyAnalysis(analysisData) {
         recommendedActions: synergy.recommendedActions,
         type: synergy.type
       })) || [],
+      
       dataSummary: {
         membersAnalyzed: statistics?.totalMembers || 0,
         projectsAnalyzed: statistics?.totalProjects || 0,
         skillsAnalyzed: statistics?.totalSkills || 0,
         specialtiesAnalyzed: statistics?.totalSpecialties || 0
       },
-      statistics: statistics || {},
+      
+      // 🔥 CORRECTION : Statistics avec champs IA
+      statistics: {
+        totalMembers: statistics?.totalMembers || 0,
+        totalProjects: statistics?.totalProjects || 0,
+        totalSkills: statistics?.totalSkills || 0,
+        totalSpecialties: statistics?.totalSpecialties || 0,
+        totalSynergies: synergyData.synergies?.length || 0,
+        totalOpportunities: synergyData.projectOpportunities?.length || 0,
+        aiEnhanced: statistics?.aiEnhanced || false,
+        aiEnhancedCount: statistics?.aiEnhancedCount || 0,
+        aiModel: statistics?.aiModel || null
+      },
+      
+      // 🔥 AJOUT : Champs IA pour le modèle
+      aiEnhanced: statistics?.aiEnhanced || false,
+      aiEnhancedCount: statistics?.aiEnhancedCount || 0,
+      aiModel: statistics?.aiModel || null,
+      
       analysisTimestamp: timestamp,
       status: 'completed'
     });
@@ -345,6 +413,52 @@ async function handleGetSynergyAnalyses() {
     };
   } catch (error) {
     console.error('💥 Error getting synergy analyses:', error);
+    throw error;
+  }
+}
+
+// 🔥 AJOUT : Handler pour les interactions
+async function handleGetInteractions() {
+  try {
+    if (!Interaction) {
+      throw new Error('Interaction model not available');
+    }
+
+    const interactions = await Interaction.find()
+      .populate('from', 'name title organization')
+      .populate('to', 'name title organization')
+      .populate('projects', 'name status')
+      .limit(50)
+      .sort({ createdAt: -1 });
+
+    return {
+      success: true,
+      data: interactions,
+      total: interactions.length
+    };
+  } catch (error) {
+    console.error('💥 Error getting interactions:', error);
+    throw error;
+  }
+}
+
+// 🔥 AJOUT : Handler pour créer une interaction
+async function handleCreateInteraction(interactionData) {
+  try {
+    if (!Interaction) {
+      throw new Error('Interaction model not available');
+    }
+
+    const newInteraction = new Interaction(interactionData);
+    const savedInteraction = await newInteraction.save();
+
+    return {
+      success: true,
+      data: savedInteraction,
+      message: 'Interaction créée avec succès'
+    };
+  } catch (error) {
+    console.error('💥 Error creating interaction:', error);
     throw error;
   }
 }
@@ -445,7 +559,7 @@ app.get('/api/v1/all-data/matrix-data', async (req, res) => {
 // 🔹 ROUTES POUR LES ANALYSES DE SYNERGIES (directes)
 const synergyAnalysisRoutes = express.Router();
 
-// POST - Sauvegarder une analyse de synergies
+// POST - Sauvegarder une analyse de synergies - CORRIGÉ
 synergyAnalysisRoutes.post('/', async (req, res) => {
   try {
     console.log('💾 POST /api/v1/synergy-analysis - Sauvegarde analyse...');
@@ -474,17 +588,34 @@ synergyAnalysisRoutes.post('/', async (req, res) => {
       });
     }
 
+    // 🔥 CORRECTION : Utilisation de la même structure que handleSaveSynergyAnalysis
     const newAnalysis = new Analysis({
       type: 'professional_synergy_analysis',
       title: title.trim(),
       description: description?.trim() || `Analyse des synergies professionnelles - ${new Date().toLocaleDateString('fr-FR')}`,
-      analysisData: analysisData,
+      
+      analysisData: {
+        synergies: analysisData.synergies || [],
+        projectOpportunities: analysisData.projectOpportunities || [],
+        summary: analysisData.summary || {
+          totalSynergies: analysisData.synergies?.length || 0,
+          highPotentialSynergies: analysisData.synergies?.filter(s => s.potential === 'Élevé' || s.potential === 'Exceptionnel').length || 0,
+          projectOpportunities: analysisData.projectOpportunities?.length || 0,
+          analyzedMembers: statistics?.totalMembers || 0,
+          aiEnhanced: statistics?.aiEnhanced || false,
+          aiAnalysesCount: statistics?.aiEnhancedCount || 0,
+          aiModel: statistics?.aiModel || null
+        },
+        timestamp: timestamp
+      },
+      
       insights: {
         totalSynergies: analysisData.synergies?.length || 0,
-        highPotential: analysisData.synergies?.filter(s => s.potential === 'Élevé').length || 0,
+        highPotential: analysisData.synergies?.filter(s => s.potential === 'Élevé' || s.potential === 'Exceptionnel').length || 0,
         projectOpportunities: analysisData.projectOpportunities?.length || 0,
         analyzedMembers: statistics?.totalMembers || 0
       },
+      
       suggestions: analysisData.synergies?.map(synergy => ({
         members: [synergy.member1?.name, synergy.member2?.name],
         score: synergy.score,
@@ -493,13 +624,30 @@ synergyAnalysisRoutes.post('/', async (req, res) => {
         recommendedActions: synergy.recommendedActions,
         type: synergy.type
       })) || [],
+      
       dataSummary: {
         membersAnalyzed: statistics?.totalMembers || 0,
         projectsAnalyzed: statistics?.totalProjects || 0,
         skillsAnalyzed: statistics?.totalSkills || 0,
         specialtiesAnalyzed: statistics?.totalSpecialties || 0
       },
-      statistics: statistics || {},
+      
+      statistics: {
+        totalMembers: statistics?.totalMembers || 0,
+        totalProjects: statistics?.totalProjects || 0,
+        totalSkills: statistics?.totalSkills || 0,
+        totalSpecialties: statistics?.totalSpecialties || 0,
+        totalSynergies: analysisData.synergies?.length || 0,
+        totalOpportunities: analysisData.projectOpportunities?.length || 0,
+        aiEnhanced: statistics?.aiEnhanced || false,
+        aiEnhancedCount: statistics?.aiEnhancedCount || 0,
+        aiModel: statistics?.aiModel || null
+      },
+      
+      aiEnhanced: statistics?.aiEnhanced || false,
+      aiEnhancedCount: statistics?.aiEnhancedCount || 0,
+      aiModel: statistics?.aiModel || null,
+      
       analysisTimestamp: timestamp,
       status: 'completed'
     });
@@ -664,7 +812,7 @@ synergyAnalysisRoutes.get('/recent/:limit?', async (req, res) => {
     })
       .sort({ createdAt: -1 })
       .limit(limit)
-      .select('title description insights statistics createdAt');
+      .select('title description insights statistics createdAt aiEnhanced aiEnhancedCount');
 
     res.json({
       success: true,
@@ -1167,6 +1315,8 @@ app.get('/api/v1/stats', async (req, res) => {
       totalProjects: await Project?.countDocuments() || 0,
       totalSkills: await Skill?.countDocuments() || 0,
       totalSpecialties: await Specialty?.countDocuments() || 0,
+      totalAnalyses: await Analysis?.countDocuments() || 0,
+      totalInteractions: await Interaction?.countDocuments() || 0,
     };
 
     res.json(stats);
@@ -1328,14 +1478,6 @@ app.use('/api/v1/interactions', createCrudRoutes(Interaction, 'Interaction'));
 app.use('/api/v1/specialties', createCrudRoutes(Specialty, 'Specialty'));
 app.use('/api/v1/analyses', createCrudRoutes(Analysis, 'Analysis'));
 
-// 🔹 IMPORT DES ROUTES SKILLS SPÉCIFIQUES
-try {
-  app.use('/api/v1/skills', require('./routes/skills'));
-  console.log('✅ Skills routes loaded');
-} catch (error) {
-  console.warn('⚠️ Skills routes not available:', error.message);
-}
-
 // Route racine
 app.get('/', (req, res) => {
   res.json({ 
@@ -1355,6 +1497,7 @@ app.get('/', (req, res) => {
       skills: '/api/v1/skills',
       specialties: '/api/v1/specialties',
       analyses: '/api/v1/analyses',
+      interactions: '/api/v1/interactions',
       // NOUVEAUX ENDPOINTS
       synergyAnalysis: '/api/v1/synergy-analysis',
       allMatrixData: '/api/v1/all-data/matrix-data',
@@ -1384,7 +1527,9 @@ app.use((req, res) => {
       '/api/v1/all-data/matrix-data',
       '/api/v1/execute-function',
       '/api/v1/debug/collections',
-      '/api/v1/test-cors'
+      '/api/v1/test-cors',
+      '/api/v1/analyses',
+      '/api/v1/interactions'
     ]
   });
 });
@@ -1410,6 +1555,8 @@ app.listen(PORT, '0.0.0.0', () => {
   console.log(`📦 All matrix data: http://0.0.0.0:${PORT}/api/v1/all-data/matrix-data`);
   console.log(`⚡ Execute function: http://0.0.0.0:${PORT}/api/v1/execute-function`);
   console.log(`🔧 Debug: http://0.0.0.0:${PORT}/api/v1/debug/collections`);
+  console.log(`📊 Analyses: http://0.0.0.0:${PORT}/api/v1/analyses`);
+  console.log(`💬 Interactions: http://0.0.0.0:${PORT}/api/v1/interactions`);
   
   if (isAppwrite) {
     console.log('✅ Successfully deployed on Appwrite');
