@@ -1,41 +1,33 @@
+// routes/interactions.js - VERSION CORRIGÉE
 const express = require('express');
 const router = express.Router();
 const Interaction = require('../models/Interaction');
 
-// GET toutes les interactions avec filtres avancés
+// GET toutes les interactions avec filtres CORRIGÉS
 router.get('/', async (req, res) => {
   try {
     const { 
       type, 
       status, 
-      category, 
-      priority, 
-      strategic_min,
       limit = 50,
       page = 1 
     } = req.query;
 
-    // Construction du filtre
+    // 🔥 CORRECTION : Filtres adaptés au modèle simplifié
     const filter = {};
     if (type) filter.type = type;
     if (status) filter.status = status;
-    if (category) filter.category = category;
-    if (priority) filter['payload.priority'] = priority;
-    if (strategic_min) {
-      filter['ai_analysis.strategic_value'] = { $gte: parseInt(strategic_min) };
-    }
 
     const interactions = await Interaction.find(filter)
-      .populate('from', 'name email organization title avatar')
-      .populate('to', 'name email organization title avatar')
+      .populate('from', 'name email organization title')
+      .populate('to', 'name email organization title')
       .populate('projects', 'name description status')
       .populate('groups', 'name type description')
-      .populate('specialties', 'name category memberCount')
+      .populate('specialties', 'name category') // 🔥 CORRECTION : champs simplifiés
       .sort({ createdAt: -1 })
       .limit(parseInt(limit))
       .skip((parseInt(page) - 1) * parseInt(limit));
 
-    // Count total pour la pagination
     const total = await Interaction.countDocuments(filter);
 
     res.json({
@@ -57,38 +49,47 @@ router.get('/', async (req, res) => {
   }
 });
 
-// GET interactions stratégiques (pour l'analyse IA)
-router.get('/strategic/analysis', async (req, res) => {
+// 🔥 NOUVELLE ROUTE : Interactions par membre
+router.get('/member/:memberId', async (req, res) => {
   try {
-    const strategicInteractions = await Interaction.getStrategicInteractions();
-    
+    const { memberId } = req.params;
+    const { limit = 20 } = req.query;
+
+    const interactions = await Interaction.find({
+      $or: [
+        { from: memberId },
+        { to: memberId }
+      ]
+    })
+      .populate('from', 'name title organization')
+      .populate('to', 'name title organization')
+      .populate('projects', 'name status')
+      .sort({ createdAt: -1 })
+      .limit(parseInt(limit));
+
     res.json({
       success: true,
-      data: strategicInteractions,
-      analysis: {
-        total: strategicInteractions.length,
-        avg_strategic_value: strategicInteractions.reduce((acc, curr) => 
-          acc + (curr.ai_analysis?.strategic_value || 0), 0) / strategicInteractions.length || 0
-      }
+      data: interactions,
+      total: interactions.length
     });
   } catch (err) {
-    console.error('💥 GET /interactions/strategic/analysis error:', err);
+    console.error('💥 GET /interactions/member/:memberId error:', err);
     res.status(500).json({ 
       success: false,
-      message: 'Erreur lors de la récupération des interactions stratégiques' 
+      message: 'Erreur lors de la récupération des interactions du membre' 
     });
   }
 });
 
-// GET une interaction par ID
+// GET une interaction par ID (CORRIGÉ)
 router.get('/:id', async (req, res) => {
   try {
     const interaction = await Interaction.findById(req.params.id)
-      .populate('from', 'name email organization title avatar specialties')
-      .populate('to', 'name email organization title avatar specialties')
-      .populate('projects', 'name description status timeline')
-      .populate('groups', 'name type description memberCount')
-      .populate('specialties', 'name category memberCount popularity');
+      .populate('from', 'name email organization title specialties')
+      .populate('to', 'name email organization title specialties')
+      .populate('projects', 'name description status')
+      .populate('groups', 'name type description')
+      .populate('specialties', 'name category'); // 🔥 CORRECTION
 
     if (!interaction) {
       return res.status(404).json({ 
@@ -110,19 +111,18 @@ router.get('/:id', async (req, res) => {
   }
 });
 
-// POST ajouter une interaction
+// POST ajouter une interaction (DÉJÀ BON)
 router.post('/', async (req, res) => {
   try {
     const newInteraction = new Interaction(req.body);
     const savedInteraction = await newInteraction.save();
 
-    // Populate après sauvegarde (nouvelle méthode Mongoose)
     const populated = await Interaction.findById(savedInteraction._id)
-      .populate('from', 'name email organization title avatar')
-      .populate('to', 'name email organization title avatar')
+      .populate('from', 'name email organization title')
+      .populate('to', 'name email organization title')
       .populate('projects', 'name description status')
       .populate('groups', 'name type description')
-      .populate('specialties', 'name category memberCount');
+      .populate('specialties', 'name category');
 
     res.status(201).json({
       success: true,
@@ -138,7 +138,7 @@ router.post('/', async (req, res) => {
   }
 });
 
-// PUT modifier une interaction
+// PUT modifier une interaction (DÉJÀ BON)
 router.put('/:id', async (req, res) => {
   try {
     const updated = await Interaction.findByIdAndUpdate(
@@ -146,11 +146,11 @@ router.put('/:id', async (req, res) => {
       req.body, 
       { new: true, runValidators: true }
     )
-      .populate('from', 'name email organization title avatar')
-      .populate('to', 'name email organization title avatar')
+      .populate('from', 'name email organization title')
+      .populate('to', 'name email organization title')
       .populate('projects', 'name description status')
       .populate('groups', 'name type description')
-      .populate('specialties', 'name category memberCount');
+      .populate('specialties', 'name category');
 
     if (!updated) {
       return res.status(404).json({ 
@@ -173,7 +173,7 @@ router.put('/:id', async (req, res) => {
   }
 });
 
-// DELETE supprimer une interaction
+// DELETE supprimer une interaction (DÉJÀ BON)
 router.delete('/:id', async (req, res) => {
   try {
     const deleted = await Interaction.findByIdAndDelete(req.params.id);
@@ -198,44 +198,44 @@ router.delete('/:id', async (req, res) => {
   }
 });
 
-// POST analyser une interaction avec IA
-router.post('/:id/analyze', async (req, res) => {
+// 🔥 NOUVELLE ROUTE : Statistiques des interactions
+router.get('/stats/overview', async (req, res) => {
   try {
-    const interaction = await Interaction.findById(req.params.id)
-      .populate('from to projects groups specialties');
+    const stats = await Interaction.aggregate([
+      {
+        $group: {
+          _id: null,
+          totalInteractions: { $sum: 1 },
+          byType: { $push: "$type" },
+          byStatus: { $push: "$status" },
+          avgIntensity: { $avg: "$intensity" },
+          avgScore: { $avg: "$score" }
+        }
+      }
+    ]);
 
-    if (!interaction) {
-      return res.status(404).json({ 
-        success: false,
-        message: 'Interaction non trouvée' 
-      });
-    }
-
-    // Ici vous intégrerez l'appel à l'API DeepSeek
-    // Pour l'instant, simulation d'analyse
-    const aiAnalysis = {
-      strategic_value: Math.floor(Math.random() * 100) + 1,
-      recommended_actions: [
-        'Organiser une réunion de cadrage',
-        'Impliquer des experts supplémentaires',
-        'Définir des métriques de succès'
-      ],
-      risk_level: ['low', 'medium', 'high'][Math.floor(Math.random() * 3)],
-      success_probability: Math.floor(Math.random() * 100) + 1
-    };
-
-    await interaction.markAsAnalyzed(aiAnalysis);
+    const typeStats = await Interaction.aggregate([
+      {
+        $group: {
+          _id: "$type",
+          count: { $sum: 1 },
+          avgIntensity: { $avg: "$intensity" }
+        }
+      }
+    ]);
 
     res.json({
       success: true,
-      data: interaction,
-      message: 'Interaction analysée avec succès'
+      data: {
+        overview: stats[0] || {},
+        byType: typeStats
+      }
     });
   } catch (err) {
-    console.error(`💥 POST /interactions/${req.params.id}/analyze error:`, err);
+    console.error('💥 GET /interactions/stats/overview error:', err);
     res.status(500).json({ 
       success: false,
-      message: 'Erreur lors de l\'analyse de l\'interaction' 
+      message: 'Erreur lors de la récupération des statistiques' 
     });
   }
 });
