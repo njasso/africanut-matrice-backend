@@ -1,397 +1,1155 @@
-// functions/matrice-api/src/index.js - VERSION COMPLÈTEMENT CORRIGÉE
-import { MongoClient, ObjectId } from "mongodb";
+import React, { useEffect, useState, useRef, useCallback } from 'react';
+import axios from 'axios';
+import MemberCard from '../components/MemberCard';
+import jsPDF from 'jspdf';
 
-export default async function handler({ req, res, log, error }) {
-  log("🚀 Fonction AppWrite Matrice API - Démarrage");
+export default function MembersListPage() {
+  const [allMembers, setAllMembers] = useState([]);
+  const [filteredMembers, setFilteredMembers] = useState([]);
+  const [allCollectionsData, setAllCollectionsData] = useState({});
+  const [q, setQ] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
+  const [filters, setFilters] = useState({
+    specialty: '',
+    location: '',
+    status: ''
+  });
+  
+  const debounceRef = useRef(null);
 
-  const MONGO_URI = process.env.MONGODB_URI;
-  const DB_NAME = process.env.MONGODB_DB_NAME || "matrice";
+  // Configuration AppWrite
+  const APPWRITE_PROJECT_ID = import.meta.env.VITE_APPWRITE_PROJECT_ID || '6917d4340008cda26023';
+  const APPWRITE_FUNCTION_ID = import.meta.env.VITE_APPWRITE_FUNCTION_ID || '6917e0420005d9ac19c9';
+  const APPWRITE_ENDPOINT = import.meta.env.VITE_APPWRITE_ENDPOINT || 'https://fra.cloud.appwrite.io/v1';
 
-  if (!MONGO_URI) {
-    error("❌ MONGODB_URI non configurée");
-    return res.json({ 
-      success: false, 
-      message: "Configuration MongoDB manquante" 
-    });
-  }
-
-  // 🔥 CORRECTION COMPLÈTE : Parser la requête de manière robuste
-  let requestData = {};
-  let path = '/api/v1/all-data/matrix-data'; // Route par défaut
-  let method = 'GET'; // Méthode par défaut
-
-  try {
-    console.log("📨 Type du corps de la requête:", typeof req.body);
-    console.log("📨 Corps de la requête brut:", req.body);
-
-    // Cas 1: Corps est un objet avec data
-    if (req.body && typeof req.body === 'object' && req.body.data) {
-      console.log("✅ Format: req.body.data détecté");
-      requestData = typeof req.body.data === 'string' 
-        ? JSON.parse(req.body.data) 
-        : req.body.data;
-    }
-    // Cas 2: Corps est une chaîne JSON
-    else if (req.body && typeof req.body === 'string' && req.body.trim() !== '') {
-      console.log("✅ Format: string JSON détecté");
-      try {
-        const parsedBody = JSON.parse(req.body);
-        requestData = parsedBody.data || parsedBody;
-      } catch (e) {
-        console.log("❌ Échec parsing string JSON, utilisation données par défaut");
-      }
-    }
-    // Cas 3: Corps est directement l'objet de données
-    else if (req.body && typeof req.body === 'object') {
-      console.log("✅ Format: objet direct détecté");
-      requestData = req.body;
-    }
-    // Cas 4: Corps vide ou undefined
-    else {
-      console.log("ℹ️  Corps vide ou undefined, utilisation des valeurs par défaut");
-    }
-
-    // Extraire path et method de requestData
-    path = requestData.path || '/api/v1/all-data/matrix-data';
-    method = requestData.method || 'GET';
-
-    console.log("✅ Données parsées:", { path, method, body: requestData.body });
-
-  } catch (parseError) {
-    console.error("❌ Erreur parsing requête:", parseError);
-    // Continuer avec les valeurs par défaut
-  }
-
-  log(`📨 Requête traitée: ${method} ${path}`);
-
-  let client;
-
-  try {
-    // Connexion MongoDB
-    client = new MongoClient(MONGO_URI);
-    await client.connect();
-    log(`✅ Connecté à MongoDB - Base: ${DB_NAME}`);
-
-    const db = client.db(DB_NAME);
-
-    // 🔥 CORRECTION : Router systématiquement vers la récupération des données
-    let response;
+  // 🔹 Fonction utilitaire pour normaliser les données - VERSION CORRIGÉE
+  const normalizeMemberData = (members) => {
+    if (!Array.isArray(members)) return [];
     
-    if (path === '/api/v1/all-data/matrix-data' || path === '/' || !path) {
-      response = await handleGetAllMatrixData(db);
-    } else if (path === '/api/v1/health') {
-      response = await handleHealthCheck(db);
-    } else {
-      response = {
-        success: false,
-        message: `Route non trouvée: ${path}`,
-        availableRoutes: [
-          '/api/v1/all-data/matrix-data',
-          '/api/v1/health'
-        ]
-      };
-    }
+    return members.map(member => {
+      console.log('🔍 Normalisation frontend:', { 
+        name: member.name, 
+        specialties: member.specialties,
+        skills: member.skills 
+      });
 
-    await client.close();
-    
-    log(`✅ Réponse préparée pour ${path} - Succès: ${response.success}`);
-    
-    return res.json({
-      success: true,
-      responseBody: JSON.stringify(response),
-      statusCode: response.success === false ? 404 : 200
-    });
-
-  } catch (err) {
-    error(`💥 Erreur critique: ${err.message}`);
-    if (client) await client.close();
-    
-    // 🔥 CORRECTION : Retourner une réponse d'erreur structurée
-    const errorResponse = {
-      success: false,
-      message: `Erreur serveur: ${err.message}`,
-      timestamp: new Date().toISOString()
-    };
-    
-    return res.json({
-      success: false,
-      responseBody: JSON.stringify(errorResponse),
-      statusCode: 500
-    });
-  }
-}
-
-// 🔥 FONCTION HEALTH CHECK
-async function handleHealthCheck(db) {
-  return {
-    status: "OK",
-    message: "API Matrice opérationnelle sur AppWrite",
-    timestamp: new Date().toISOString(),
-    version: "2.0.0",
-    database: "Connected",
-    platform: "appwrite",
-    collections: await db.listCollections().toArray().then(cols => cols.map(c => c.name))
-  };
-}
-
-// 🔥 FONCTION PRINCIPALE POUR RÉCUPÉRER TOUTES LES DONNÉES
-async function handleGetAllMatrixData(db) {
-  try {
-    log('📦 Récupération de toutes les données de la matrice...');
-
-    // Récupérer la liste des collections
-    const collections = await db.listCollections().toArray();
-    const collectionNames = collections.map(col => col.name);
-    
-    log(`📋 Collections disponibles: ${collectionNames.join(', ')}`);
-
-    // Fonction pour récupérer une collection avec gestion d'erreur robuste
-    const safeCollectionGet = async (collectionName) => {
-      try {
-        if (!collectionNames.includes(collectionName)) {
-          log(`⚠️ Collection ${collectionName} n'existe pas`);
-          return [];
-        }
-        
-        const data = await db.collection(collectionName).find({}).toArray();
-        log(`✅ ${collectionName}: ${data.length} documents`);
-        return data;
-      } catch (err) {
-        log(`❌ Erreur collection ${collectionName}: ${err.message}`);
-        return [];
-      }
-    };
-
-    // Collections attendues
-    const expectedCollections = [
-      'members', 'projects', 'groups', 'analyses', 
-      'interactions', 'skills', 'specialties'
-    ];
-
-    // Récupérer toutes les collections en parallèle
-    const collectionPromises = {};
-    for (const collectionName of expectedCollections) {
-      collectionPromises[collectionName] = safeCollectionGet(collectionName);
-    }
-
-    // Attendre toutes les promesses
-    const results = await Promise.allSettled(Object.values(collectionPromises));
-    
-    // Extraire les résultats avec gestion d'erreur
-    const members = results[0].status === 'fulfilled' ? results[0].value : [];
-    const projects = results[1].status === 'fulfilled' ? results[1].value : [];
-    const groups = results[2].status === 'fulfilled' ? results[2].value : [];
-    const analyses = results[3].status === 'fulfilled' ? results[3].value : [];
-    const interactions = results[4].status === 'fulfilled' ? results[4].value : [];
-    const skills = results[5].status === 'fulfilled' ? results[5].value : [];
-    const specialties = results[6].status === 'fulfilled' ? results[6].value : [];
-
-    // Log des statistiques
-    log(`📊 Résultats: ${members.length} membres, ${projects.length} projets, ${groups.length} groupes`);
-
-    // Fonction de nettoyage des tableaux
-    const cleanArray = (data) => {
-      if (!data) return [];
-      if (Array.isArray(data)) {
-        return data
-          .map(item => {
-            if (typeof item === 'string') return item.trim();
-            if (item && typeof item === 'object') return String(item).trim();
-            return String(item).trim();
+      // 🔹 CONVERSION DES SPÉCIALITÉS
+      let specialties = [];
+      if (Array.isArray(member.specialties)) {
+        specialties = member.specialties
+          .map(spec => {
+            if (typeof spec === 'string') return spec.trim();
+            return String(spec).trim();
           })
-          .filter(item => item && item !== '' && item !== 'null' && item !== 'undefined');
-      }
-      if (typeof data === 'string') {
-        return data
+          .filter(spec => spec && spec !== '' && spec !== 'null' && spec !== 'undefined');
+      } else if (typeof member.specialties === 'string') {
+        specialties = member.specialties
           .split(/[,;|]/)
-          .map(item => item.trim())
-          .filter(item => item && item !== '' && item !== 'null' && item !== 'undefined');
+          .map(spec => spec.trim())
+          .filter(spec => spec && spec !== '' && spec !== 'null' && spec !== 'undefined');
       }
-      return [String(data)].filter(item => item && item !== '' && item !== 'null' && item !== 'undefined');
-    };
 
-    // 🔥 FORMATER LES MEMBRES
-    const formattedMembers = members.map(member => {
-      try {
-        // Nettoyer les spécialités et compétences
-        const specialties = cleanArray(member.specialties);
-        const skills = cleanArray(member.skills);
-        
-        // Corriger l'URL de la photo
-        let photoUrl = member.photo || '';
-        if (photoUrl && photoUrl.startsWith('../assets/photos/')) {
+      // 🔹 CONVERSION DES COMPÉTENCES
+      let skills = [];
+      if (Array.isArray(member.skills)) {
+        skills = member.skills
+          .map(skill => {
+            if (typeof skill === 'string') return skill.trim();
+            return String(skill).trim();
+          })
+          .filter(skill => skill && skill !== '' && skill !== 'null' && skill !== 'undefined');
+      } else if (typeof member.skills === 'string') {
+        skills = member.skills
+          .split(/[,;|]/)
+          .map(skill => skill.trim())
+          .filter(skill => skill && skill !== '' && skill !== 'null' && skill !== 'undefined');
+      }
+
+      // 🔹 CORRECTION DU CHEMIN DE LA PHOTO
+      let photoUrl = member.photo || '';
+      if (photoUrl) {
+        if (photoUrl.startsWith('../assets/photos/')) {
           photoUrl = photoUrl.replace('../assets/photos/', '/assets/photos/');
         }
-
-        return {
-          _id: member._id?.toString() || `mock-${Math.random().toString(36).substr(2, 9)}`,
-          name: member.name || 'Nom non renseigné',
-          title: member.title || 'Titre non renseigné',
-          email: member.email || '',
-          phone: member.phone || '',
-          location: member.location || '',
-          organization: member.organization || member.entreprise || '',
-          entreprise: member.entreprise || member.organization || '',
-          specialties: specialties,
-          skills: skills,
-          projects: cleanArray(member.projects),
-          bio: member.bio || '',
-          statutMembre: member.statutMembre || 'Actif',
-          experienceYears: member.experienceYears || 0,
-          photo: photoUrl,
-          cvLink: member.cvLink || '',
-          linkedin: member.linkedin || '',
-          availability: member.availability || '',
-          isActive: member.isActive !== false,
-          createdAt: member.createdAt || new Date(),
-          updatedAt: member.updatedAt || new Date()
-        };
-      } catch (memberError) {
-        log(`❌ Erreur formatage membre: ${memberError.message}`);
-        // Retourner un membre minimal en cas d'erreur
-        return {
-          _id: `error-${Math.random().toString(36).substr(2, 9)}`,
-          name: 'Membre (erreur)',
-          title: 'Erreur de chargement',
-          specialties: [],
-          skills: [],
-          statutMembre: 'Inactif'
-        };
+        // Si c'est un chemin relatif sans domaine
+        if (photoUrl.startsWith('/') && !photoUrl.startsWith('//') && !photoUrl.startsWith('http')) {
+          photoUrl = `${window.location.origin}${photoUrl}`;
+        }
       }
-    }).filter(member => member !== null);
 
-    // Formater les autres collections
-    const formattedProjects = projects.map(project => ({
-      _id: project._id?.toString(),
-      title: project.title || 'Sans titre',
-      description: project.description || '',
-      status: project.status || 'idea',
-      organization: project.organization || '',
-      tags: cleanArray(project.tags),
-      members: cleanArray(project.members),
-      createdAt: project.createdAt || new Date(),
-      importedFromMember: project.importedFromMember || false,
-      memberSource: project.memberSource || ''
-    }));
+      const normalizedMember = {
+        // Champs de base
+        _id: member._id || member.id,
+        name: member.name || '',
+        title: member.title || '',
+        email: member.email || '',
+        phone: member.phone || '',
+        location: member.location || '',
+        
+        // Organisation/Entreprise
+        organization: member.organization || member.entreprise || '',
+        entreprise: member.entreprise || member.organization || '',
+        
+        // 🔹 TABLEAUX CORRIGÉS
+        specialties: specialties,
+        skills: skills,
+        
+        // Autres champs
+        projects: member.projects || '',
+        bio: member.bio || '',
+        statutMembre: member.statutMembre || 'Actif',
+        experienceYears: member.experienceYears || 0,
+        photo: photoUrl,
+        cvLink: member.cvLink || '',
+        linkedin: member.linkedin || '',
+        availability: member.availability || '',
+        
+        // Pour compatibilité
+        isActive: member.isActive !== undefined ? member.isActive : true
+      };
 
-    const formattedGroups = groups.map(group => ({
-      _id: group._id?.toString(),
-      name: group.name || '',
-      description: group.description || '',
-      type: group.type || 'technique',
-      privacy: group.privacy || 'public',
-      tags: cleanArray(group.tags),
-      members: cleanArray(group.members),
-      leader: group.leader?.toString(),
-      memberCount: group.members ? group.members.length : 0,
-      createdAt: group.createdAt || new Date()
-    }));
+      console.log('✅ Membre normalisé frontend:', {
+        name: normalizedMember.name,
+        specialties: normalizedMember.specialties,
+        skills: normalizedMember.skills
+      });
 
-    const formattedAnalyses = analyses.map(analysis => ({
-      _id: analysis._id?.toString(),
-      type: analysis.type || 'interaction_analysis',
-      title: analysis.title || '',
-      description: analysis.description || '',
-      analysisData: analysis.analysisData || {},
-      insights: analysis.insights || {},
-      suggestions: cleanArray(analysis.suggestions),
-      statistics: analysis.statistics || {},
-      status: analysis.status || 'completed',
-      timestamp: analysis.timestamp || analysis.createdAt || new Date()
-    }));
+      return normalizedMember;
+    });
+  };
 
-    const formattedInteractions = interactions.map(interaction => ({
-      _id: interaction._id?.toString(),
-      type: interaction.type || 'message',
-      title: interaction.title || '',
-      description: interaction.description || '',
-      from: interaction.from?.toString(),
-      to: cleanArray(interaction.to),
-      projects: cleanArray(interaction.projects),
-      status: interaction.status || 'pending',
-      participantCount: 1 + (interaction.to ? interaction.to.length : 0),
-      createdAt: interaction.createdAt || new Date()
-    }));
+  // 🔹 Charger toutes les données depuis AppWrite - VERSION ULTRA-SIMPLIFIÉE
+const fetchAllMembers = useCallback(async () => {
+  try {
+    setLoading(true);
+    setError(null);
 
-    const formattedSkills = skills.map(skill => ({
-      _id: skill._id?.toString(),
-      name: skill.name || '',
-      category: skill.category || 'technique',
-      description: skill.description || '',
-      memberCount: skill.memberCount || 0
-    }));
+    console.log('🔄 Chargement des données depuis AppWrite...');
 
-    const formattedSpecialties = specialties.map(specialty => ({
-      _id: specialty._id?.toString(),
-      name: specialty.name || '',
-      category: specialty.category || 'technique',
-      description: specialty.description || '',
-      memberCount: specialty.memberCount || 0
-    }));
+    const appwriteUrl = `${APPWRITE_ENDPOINT}/functions/${APPWRITE_FUNCTION_ID}/executions`;
 
-    // 🔥 PRÉPARER LA RÉPONSE FINALE
-    const responseData = {
-      success: true,
-      data: {
-        members: formattedMembers,
-        projects: formattedProjects,
-        groups: formattedGroups,
-        analyses: formattedAnalyses,
-        interactions: formattedInteractions,
-        skills: formattedSkills,
-        specialties: formattedSpecialties
-      },
-      metadata: {
-        totals: {
-          members: formattedMembers.length,
-          projects: formattedProjects.length,
-          groups: formattedGroups.length,
-          analyses: formattedAnalyses.length,
-          interactions: formattedInteractions.length,
-          skills: formattedSkills.length,
-          specialties: formattedSpecialties.length
-        },
-        database: DB_NAME,
-        timestamp: new Date().toISOString(),
-        version: "2.0.0"
-      },
-      message: `Données chargées avec succès: ${formattedMembers.length} membres, ${formattedProjects.length} projets`
+    // 🔥 CORRECTION : Payload minimal et correct
+    const requestPayload = {
+      data: JSON.stringify({
+        path: '/api/v1/all-data/matrix-data',
+        method: 'GET'
+      })
     };
 
-    log(`✅ Préparation réponse: ${formattedMembers.length} membres formatés`);
+    console.log('📤 Envoi requête à AppWrite...');
 
-    return responseData;
+    const response = await axios.post(
+      appwriteUrl,
+      requestPayload,
+      {
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Appwrite-Project': APPWRITE_PROJECT_ID,
+        },
+        timeout: 15000
+      }
+    );
+
+    console.log('📨 Réponse AppWrite reçue:', response.data);
+
+    // 🔥 CORRECTION : Extraction directe et simple
+    let membersData = [];
+    let allData = {};
+
+    if (response.data && response.data.responseBody) {
+      try {
+        const responseBody = JSON.parse(response.data.responseBody);
+        console.log('✅ ResponseBody parsé:', responseBody);
+
+        if (responseBody.success && responseBody.data) {
+          allData = responseBody.data;
+          membersData = allData.members || [];
+          console.log(`✅ ${membersData.length} membres extraits`);
+        } else {
+          console.log('⚠️ ResponseBody sans données valides');
+        }
+      } catch (parseError) {
+        console.error('❌ Erreur parsing responseBody:', parseError);
+      }
+    }
+
+    // Si pas de données, utiliser des données de test
+    if (membersData.length === 0) {
+      console.log('🔄 Utilisation de données de test...');
+      membersData = [
+        {
+          _id: 'test-1',
+          name: 'Jean Dupont',
+          title: 'Développeur Fullstack',
+          email: 'jean.dupont@example.com',
+          organization: 'Tech Corp',
+          specialties: ['JavaScript', 'React'],
+          skills: ['Frontend', 'Backend'],
+          location: 'Paris',
+          statutMembre: 'Actif'
+        },
+        {
+          _id: 'test-2',
+          name: 'Marie Martin',
+          title: 'Designer UX/UI',
+          email: 'marie.martin@example.com', 
+          organization: 'Design Studio',
+          specialties: ['UI Design'],
+          skills: ['Figma'],
+          location: 'Lyon',
+          statutMembre: 'Actif'
+        }
+      ];
+      allData = { members: membersData };
+    }
+
+    // Normaliser et mettre à jour l'état
+    const normalizedMembers = normalizeMemberData(membersData);
+    setAllMembers(normalizedMembers);
+    setFilteredMembers(normalizedMembers);
+    setAllCollectionsData(allData);
+
+    console.log(`✅ ${normalizedMembers.length} membres chargés`);
 
   } catch (err) {
-    log('❌ Erreur récupération données matrice:', err);
-    
-    // 🔥 CORRECTION : Retourner une structure vide mais valide en cas d'erreur
-    return {
-      success: true,
-      data: {
-        members: [],
-        projects: [],
-        groups: [],
-        analyses: [],
-        interactions: [],
-        skills: [],
-        specialties: []
-      },
-      metadata: {
-        totals: {
-          members: 0,
-          projects: 0,
-          groups: 0,
-          analyses: 0,
-          interactions: 0,
-          skills: 0,
-          specialties: 0
-        },
-        database: DB_NAME,
-        timestamp: new Date().toISOString(),
-        error: err.message
-      },
-      message: "Base de données chargée (vide)"
-    };
+    console.error('❌ Erreur de chargement:', err);
+    setError(`Erreur: ${err.message}`);
+    setAllMembers([]);
+    setFilteredMembers([]);
+  } finally {
+    setLoading(false);
   }
+}, [APPWRITE_PROJECT_ID, APPWRITE_FUNCTION_ID, APPWRITE_ENDPOINT]);
+  // 🔹 Fonction pour générer et télécharger le PDF - VERSION CORRIGÉE
+  const generateFullPDF = () => {
+    if (allMembers.length === 0) {
+      alert('Aucun membre à exporter');
+      return;
+    }
+
+    const doc = new jsPDF();
+    const totalMembers = allMembers.length;
+    const activeMembers = allMembers.filter(m => m.statutMembre === 'Actif').length;
+
+    // === PAGE 1 : COUVERTURE ===
+    doc.setFillColor(45, 55, 72);
+    doc.rect(0, 0, 210, 297, 'F');
+    
+    doc.setTextColor(255, 255, 255);
+    doc.setFontSize(32);
+    doc.setFont(undefined, 'bold');
+    doc.text('ANNUAIRE DES MEMBRES', 105, 70, { align: 'center' });
+    
+    doc.setDrawColor(99, 102, 241);
+    doc.setLineWidth(2);
+    doc.line(55, 80, 155, 80);
+    
+    doc.setFontSize(16);
+    doc.setFont(undefined, 'normal');
+    doc.setTextColor(203, 213, 225);
+    doc.text('Profils Complets des Professionnels', 105, 95, { align: 'center' });
+    
+    doc.setTextColor(148, 163, 184);
+    doc.setFontSize(11);
+    doc.text(`Généré le ${new Date().toLocaleDateString('fr-FR')}`, 105, 110, { align: 'center' });
+
+    // Statistiques
+    doc.setTextColor(255, 255, 255);
+    doc.setFontSize(18);
+    doc.setFont(undefined, 'bold');
+    doc.text('📊 STATISTIQUES', 105, 140, { align: 'center' });
+    
+    const stats = [
+      { label: 'Total Membres', value: totalMembers, emoji: '👥', color: [59, 130, 246] },
+      { label: 'Actifs', value: activeMembers, emoji: '✅', color: [34, 197, 94] },
+      { label: 'En Attente', value: totalMembers - activeMembers, emoji: '⏳', color: [251, 146, 60] }
+    ];
+    
+    stats.forEach((stat, index) => {
+      const x = 30 + (index * 60);
+      doc.setFillColor(55, 65, 81);
+      doc.roundedRect(x, 157, 50, 50, 4, 4, 'F');
+      doc.setFillColor(...stat.color);
+      doc.roundedRect(x, 155, 50, 50, 4, 4, 'F');
+      
+      doc.setTextColor(255, 255, 255);
+      doc.setFontSize(14);
+      doc.text(stat.emoji, x + 25, 170, { align: 'center' });
+      doc.setFontSize(24);
+      doc.setFont(undefined, 'bold');
+      doc.text(stat.value.toString(), x + 25, 187, { align: 'center' });
+      doc.setFontSize(8);
+      doc.setFont(undefined, 'normal');
+      doc.text(stat.label, x + 25, 197, { align: 'center' });
+    });
+
+    doc.setFontSize(9);
+    doc.setTextColor(148, 163, 184);
+    doc.text('Données actualisées en temps réel', 105, 270, { align: 'center' });
+
+    // === PAGES DE PROFILS ===
+    allMembers.forEach((member, index) => {
+      if (index > 0) doc.addPage();
+      
+      // En-tête
+      doc.setFillColor(99, 102, 241);
+      doc.rect(0, 0, 210, 35, 'F');
+      
+      doc.setFillColor(255, 255, 255);
+      doc.circle(25, 17.5, 8, 'F');
+      doc.setTextColor(99, 102, 241);
+      doc.setFontSize(12);
+      doc.setFont(undefined, 'bold');
+      doc.text(`${index + 1}`, 25, 19.5, { align: 'center' });
+      
+      doc.setTextColor(255, 255, 255);
+      doc.setFontSize(16);
+      doc.text('PROFIL MEMBRE', 105, 22, { align: 'center' });
+
+      let yPos = 50;
+
+      // Carte membre
+      doc.setFillColor(248, 250, 252);
+      doc.roundedRect(15, yPos, 180, 85, 5, 5, 'F');
+      doc.setDrawColor(226, 232, 240);
+      doc.setLineWidth(0.5);
+      doc.roundedRect(15, yPos, 180, 85, 5, 5, 'S');
+      
+      // Initiales
+      const initials = (member.name || 'NN')
+        .split(' ')
+        .map(n => n[0])
+        .join('')
+        .toUpperCase()
+        .slice(0, 2);
+      
+      doc.setFillColor(99, 102, 241);
+      doc.circle(30, yPos + 25, 10, 'F');
+      doc.setTextColor(255, 255, 255);
+      doc.setFontSize(14);
+      doc.setFont(undefined, 'bold');
+      doc.text(initials, 30, yPos + 27, { align: 'center' });
+
+      // Nom et titre
+      doc.setTextColor(30, 41, 59);
+      doc.setFontSize(16);
+      doc.setFont(undefined, 'bold');
+      const name = member.name || 'Nom non renseigné';
+      doc.text(name.length > 30 ? name.substring(0, 27) + '...' : name, 45, yPos + 20);
+      
+      doc.setFontSize(11);
+      doc.setFont(undefined, 'normal');
+      doc.setTextColor(100, 116, 139);
+      const title = member.title || 'Titre non renseigné';
+      doc.text(title.length > 40 ? title.substring(0, 37) + '...' : title, 45, yPos + 27);
+
+      // Statut
+      const status = member.statutMembre || 'Inconnu';
+      const statusColors = {
+        'Actif': [34, 197, 94],
+        'En attente': [251, 146, 60],
+        'Inactif': [239, 68, 68]
+      };
+      const statusColor = statusColors[status] || [156, 163, 175];
+      
+      doc.setFillColor(...statusColor);
+      doc.roundedRect(160, yPos + 15, 30, 12, 6, 6, 'F');
+      doc.setTextColor(255, 255, 255);
+      doc.setFontSize(8);
+      doc.setFont(undefined, 'bold');
+      doc.text(status.toUpperCase(), 175, yPos + 22, { align: 'center' });
+
+      // Contact
+      yPos += 40;
+      const contactInfo = [
+        { icon: '📧', value: member.email || 'Non renseigné' },
+        { icon: '📞', value: member.phone || 'Non renseigné' },
+        { icon: '📍', value: member.location || 'Non renseignée' }
+      ];
+
+      contactInfo.forEach((info, i) => {
+        doc.setFontSize(9);
+        doc.setFont(undefined, 'bold');
+        doc.setTextColor(71, 85, 105);
+        doc.text(info.icon, 20, yPos + (i * 8));
+        doc.setFont(undefined, 'normal');
+        doc.setTextColor(100, 116, 139);
+        const text = info.value.length > 45 ? info.value.substring(0, 42) + '...' : info.value;
+        doc.text(text, 28, yPos + (i * 8));
+      });
+
+      yPos += 30;
+
+      // Organisation
+      if (member.organization || member.entreprise) {
+        doc.setFillColor(241, 245, 249);
+        doc.roundedRect(15, yPos, 180, 20, 3, 3, 'F');
+        
+        doc.setFontSize(9);
+        doc.setFont(undefined, 'bold');
+        doc.setTextColor(51, 65, 85);
+        doc.text('🏢 ORGANISATION', 20, yPos + 7);
+        
+        doc.setFont(undefined, 'normal');
+        doc.setTextColor(71, 85, 105);
+        const org = member.organization || member.entreprise || '';
+        const orgText = org.length > 50 ? org.substring(0, 47) + '...' : org;
+        doc.text(orgText, 20, yPos + 14);
+        
+        yPos += 25;
+      }
+
+      // Spécialités - CORRIGÉ POUR TABLEAUX
+      doc.setFillColor(239, 246, 255);
+      doc.roundedRect(15, yPos, 85, 45, 3, 3, 'F');
+      
+      doc.setFontSize(10);
+      doc.setFont(undefined, 'bold');
+      doc.setTextColor(30, 64, 175);
+      doc.text('🎯 SPÉCIALITÉS', 20, yPos + 8);
+      
+      doc.setFontSize(8);
+      doc.setFont(undefined, 'normal');
+      doc.setTextColor(51, 65, 85);
+      
+      const specialties = Array.isArray(member.specialties) ? member.specialties : [];
+      if (specialties.length > 0) {
+        specialties.slice(0, 4).forEach((spec, i) => {
+          const specText = spec.length > 25 ? spec.substring(0, 22) + '...' : spec;
+          doc.setFillColor(219, 234, 254);
+          doc.roundedRect(20, yPos + 12 + (i * 7), 60, 5, 2, 2, 'F');
+          doc.text(`• ${specText}`, 22, yPos + 15 + (i * 7));
+        });
+        if (specialties.length > 4) {
+          doc.setTextColor(100, 116, 139);
+          doc.text(`+${specialties.length - 4} autre(s)`, 20, yPos + 40);
+        }
+      } else {
+        doc.setTextColor(156, 163, 175);
+        doc.text('Aucune spécialité', 20, yPos + 15);
+      }
+
+      // Compétences - CORRIGÉ POUR TABLEAUX
+      doc.setFillColor(254, 243, 199);
+      doc.roundedRect(110, yPos, 85, 45, 3, 3, 'F');
+      
+      doc.setFontSize(10);
+      doc.setFont(undefined, 'bold');
+      doc.setTextColor(180, 83, 9);
+      doc.text('💡 COMPÉTENCES', 115, yPos + 8);
+      
+      doc.setFontSize(8);
+      doc.setFont(undefined, 'normal');
+      doc.setTextColor(51, 65, 85);
+      
+      const skills = Array.isArray(member.skills) ? member.skills : [];
+      if (skills.length > 0) {
+        skills.slice(0, 4).forEach((skill, i) => {
+          const skillText = skill.length > 25 ? skill.substring(0, 22) + '...' : skill;
+          doc.setFillColor(254, 215, 170);
+          doc.roundedRect(115, yPos + 12 + (i * 7), 60, 5, 2, 2, 'F');
+          doc.text(`• ${skillText}`, 117, yPos + 15 + (i * 7));
+        });
+        if (skills.length > 4) {
+          doc.setTextColor(100, 116, 139);
+          doc.text(`+${skills.length - 4} autre(s)`, 115, yPos + 40);
+        }
+      } else {
+        doc.setTextColor(156, 163, 175);
+        doc.text('Aucune compétence', 115, yPos + 15);
+      }
+
+      yPos += 50;
+
+      // Projets
+      if (member.projects) {
+        doc.setFillColor(240, 253, 244);
+        doc.roundedRect(15, yPos, 180, 30, 3, 3, 'F');
+        
+        doc.setFontSize(10);
+        doc.setFont(undefined, 'bold');
+        doc.setTextColor(21, 128, 61);
+        doc.text('🚀 PROJETS', 20, yPos + 8);
+        
+        doc.setFontSize(8);
+        doc.setFont(undefined, 'normal');
+        doc.setTextColor(51, 65, 85);
+        
+        const projects = member.projects.length > 120 
+          ? member.projects.substring(0, 117) + '...' 
+          : member.projects;
+        
+        const lines = doc.splitTextToSize(projects, 170);
+        doc.text(lines.slice(0, 3), 20, yPos + 15);
+        
+        yPos += 35;
+      }
+
+      // Bio
+      if (member.bio) {
+        doc.setFillColor(249, 250, 251);
+        doc.roundedRect(15, yPos, 180, 35, 3, 3, 'F');
+        
+        doc.setFontSize(10);
+        doc.setFont(undefined, 'bold');
+        doc.setTextColor(75, 85, 99);
+        doc.text('📝 BIOGRAPHIE', 20, yPos + 8);
+        
+        doc.setFontSize(8);
+        doc.setFont(undefined, 'normal');
+        doc.setTextColor(71, 85, 105);
+        
+        const bio = member.bio.length > 200 
+          ? member.bio.substring(0, 197) + '...' 
+          : member.bio;
+        
+        const bioLines = doc.splitTextToSize(bio, 170);
+        doc.text(bioLines.slice(0, 4), 20, yPos + 15);
+      }
+
+      // Pied de page
+      doc.setFontSize(7);
+      doc.setTextColor(156, 163, 175);
+      doc.text(`Profil ${index + 1} sur ${totalMembers}`, 105, 287, { align: 'center' });
+      doc.text(`Généré le ${new Date().toLocaleDateString('fr-FR')}`, 105, 292, { align: 'center' });
+    });
+
+    // Téléchargement
+    const fileName = `annuaire-membres-${new Date().toISOString().split('T')[0]}.pdf`;
+    doc.save(fileName);
+  };
+
+  // 🔹 Fonction pour extraire le texte de recherche - VERSION CORRIGÉE
+  const getSearchableText = (member) => {
+    const specialtiesText = Array.isArray(member.specialties) 
+      ? member.specialties.join(' ') 
+      : member.specialties || '';
+    
+    const skillsText = Array.isArray(member.skills) 
+      ? member.skills.join(' ') 
+      : member.skills || '';
+
+    return `
+      ${member.name || ''}
+      ${member.title || ''}
+      ${member.email || ''}
+      ${specialtiesText}
+      ${skillsText}
+      ${member.location || ''}
+      ${member.entreprise || ''}
+      ${member.organization || ''}
+      ${member.projects || ''}
+      ${member.statutMembre || ''}
+    `.toLowerCase();
+  };
+
+  // 🔹 Fonction utilitaire pour les icônes des collections
+  const getCollectionIcon = (collection) => {
+    const icons = {
+      members: '👥',
+      projects: '🚀',
+      skills: '💡',
+      specialties: '🎯',
+      groups: '👨‍👩‍👧‍👦',
+      interactions: '💬',
+      analyses: '📈'
+    };
+    return icons[collection] || '📁';
+  };
+
+  // 🔹 Chargement initial
+  useEffect(() => {
+    fetchAllMembers();
+  }, [fetchAllMembers]);
+
+  // 🔹 Filtrer les membres localement - VERSION CORRIGÉE
+  useEffect(() => {
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    
+    debounceRef.current = setTimeout(() => {
+      let results = [...allMembers];
+
+      if (q.trim()) {
+        const searchTerm = q.trim().toLowerCase();
+        results = results.filter(member => {
+          const searchableText = getSearchableText(member);
+          return searchableText.includes(searchTerm);
+        });
+      }
+
+      if (filters.specialty) {
+        const specialtyTerm = filters.specialty.toLowerCase();
+        results = results.filter(member => {
+          const specialties = Array.isArray(member.specialties) 
+            ? member.specialties 
+            : [member.specialties || ''];
+          return specialties.some(spec => 
+            spec && spec.toLowerCase().includes(specialtyTerm)
+          );
+        });
+      }
+
+      if (filters.location) {
+        results = results.filter(member => 
+          member.location?.toLowerCase().includes(filters.location.toLowerCase())
+        );
+      }
+
+      if (filters.status) {
+        results = results.filter(member => 
+          member.statutMembre?.toLowerCase() === filters.status.toLowerCase()
+        );
+      }
+
+      setFilteredMembers(results);
+      
+      console.log(`🔍 Filtrage: ${allMembers.length} → ${results.length} membres`);
+      
+    }, 300);
+    
+    return () => clearTimeout(debounceRef.current);
+  }, [q, filters, allMembers]);
+
+  // 🔹 Gestion du changement de filtre
+  const handleFilterChange = (filterType, value) => {
+    setFilters(prev => ({
+      ...prev,
+      [filterType]: value
+    }));
+  };
+
+  // 🔹 Réinitialisation des filtres
+  const handleResetFilters = () => {
+    setQ('');
+    setFilters({
+      specialty: '',
+      location: '',
+      status: ''
+    });
+  };
+
+  // 🔹 Rechargement des données
+  const handleReload = () => {
+    fetchAllMembers();
+  };
+
+  // 🔹 Statistiques
+  const activeFiltersCount = [
+    q.trim(),
+    filters.specialty,
+    filters.location,
+    filters.status
+  ].filter(Boolean).length;
+
+  const totalCollections = Object.keys(allCollectionsData).length;
+
+  return (
+    <div style={{ 
+      padding: '20px', 
+      maxWidth: '1400px', 
+      margin: '0 auto',
+      minHeight: '100vh',
+      background: 'linear-gradient(135deg, #f8fafc 0%, #e2e8f0 100%)'
+    }}>
+      {/* En-tête */}
+      <div style={{ marginBottom: '30px' }}>
+        <div style={{
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'flex-start',
+          flexWrap: 'wrap',
+          gap: '20px'
+        }}>
+          <div>
+            <h1 style={{ 
+              margin: '0 0 8px 0', 
+              fontSize: '2.5rem', 
+              fontWeight: '800',
+              background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+              WebkitBackgroundClip: 'text',
+              WebkitTextFillColor: 'transparent',
+              backgroundClip: 'text'
+            }}>
+              Annuaire des Membres
+            </h1>
+            <p style={{ 
+              margin: '0', 
+              color: '#64748b',
+              fontSize: '1.1rem',
+              fontWeight: '500'
+            }}>
+              Données en direct depuis votre base MongoDB
+            </p>
+            {error && (
+              <div style={{ 
+                marginTop: '10px',
+                padding: '15px',
+                backgroundColor: '#fef3f2',
+                border: '1px solid #fecdca',
+                borderRadius: '8px',
+                color: '#b42318'
+              }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '8px' }}>
+                  <span>⚠️</span>
+                  <strong>Erreur de chargement</strong>
+                </div>
+                <p style={{ margin: '0 0 12px 0', fontSize: '14px' }}>{error}</p>
+                <button
+                  onClick={handleReload}
+                  style={{
+                    padding: '8px 16px',
+                    backgroundColor: '#b42318',
+                    color: 'white',
+                    border: 'none',
+                    borderRadius: '6px',
+                    cursor: 'pointer',
+                    fontSize: '14px'
+                  }}
+                >
+                  🔄 Réessayer
+                </button>
+              </div>
+            )}
+          </div>
+          
+          {/* Bouton PDF */}
+          <button
+            onClick={generateFullPDF}
+            disabled={allMembers.length === 0}
+            style={{
+              padding: '14px 24px',
+              background: allMembers.length === 0 
+                ? '#9ca3af' 
+                : 'linear-gradient(135deg, #10b981 0%, #059669 100%)',
+              color: 'white',
+              border: 'none',
+              borderRadius: '12px',
+              cursor: allMembers.length === 0 ? 'not-allowed' : 'pointer',
+              fontSize: '14px',
+              fontWeight: '600',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '10px',
+              minWidth: '220px',
+              boxShadow: allMembers.length === 0 ? 'none' : '0 4px 15px rgba(16, 185, 129, 0.3)',
+              transition: 'all 0.3s ease',
+              transform: 'translateY(0)',
+              opacity: allMembers.length === 0 ? 0.6 : 1
+            }}
+            onMouseOver={(e) => {
+              if (allMembers.length > 0) {
+                e.target.style.transform = 'translateY(-2px)';
+                e.target.style.boxShadow = '0 8px 25px rgba(16, 185, 129, 0.4)';
+              }
+            }}
+            onMouseOut={(e) => {
+              if (allMembers.length > 0) {
+                e.target.style.transform = 'translateY(0)';
+                e.target.style.boxShadow = '0 4px 15px rgba(16, 185, 129, 0.3)';
+              }
+            }}
+          >
+            <span style={{ fontSize: '18px' }}>📄</span>
+            Exporter PDF
+            {allMembers.length > 0 && (
+              <span style={{ 
+                fontSize: '12px', 
+                backgroundColor: 'rgba(255,255,255,0.2)',
+                padding: '2px 8px',
+                borderRadius: '10px',
+                marginLeft: 'auto'
+              }}>
+                {allMembers.length}
+              </span>
+            )}
+          </button>
+        </div>
+      </div>
+
+      {/* Section Statistiques des Collections */}
+      {!loading && totalCollections > 0 && (
+        <div style={{
+          backgroundColor: 'white',
+          padding: '24px',
+          borderRadius: '16px',
+          marginBottom: '30px',
+          border: '1px solid #e2e8f0',
+          boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1)'
+        }}>
+          <h3 style={{ 
+            margin: '0 0 20px 0', 
+            fontSize: '1.5rem',
+            color: '#374151',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '10px'
+          }}>
+            📊 Base de Données
+          </h3>
+          <div style={{ 
+            display: 'grid', 
+            gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', 
+            gap: '20px' 
+          }}>
+            {Object.keys(allCollectionsData).map(collection => (
+              <div key={collection} style={{
+                padding: '20px',
+                backgroundColor: '#f8fafc',
+                borderRadius: '12px',
+                textAlign: 'center',
+                border: '2px solid #e2e8f0',
+                transition: 'all 0.3s ease'
+              }}>
+                <div style={{ 
+                  fontSize: '2.5rem', 
+                  marginBottom: '12px'
+                }}>
+                  {getCollectionIcon(collection)}
+                </div>
+                <div style={{ 
+                  fontWeight: '700', 
+                  color: '#374151',
+                  textTransform: 'capitalize',
+                  marginBottom: '8px',
+                  fontSize: '1.1rem'
+                }}>
+                  {collection}
+                </div>
+                <div style={{ 
+                  fontSize: '1.5rem', 
+                  fontWeight: '800',
+                  color: '#3b82f6'
+                }}>
+                  {allCollectionsData[collection].length}
+                </div>
+                <div style={{ 
+                  fontSize: '0.8rem', 
+                  color: '#64748b',
+                  marginTop: '4px'
+                }}>
+                  documents
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Barre de recherche et filtres */}
+      <div style={{ 
+        backgroundColor: 'white', 
+        padding: '24px', 
+        borderRadius: '16px',
+        marginBottom: '30px',
+        border: '1px solid #e2e8f0',
+        boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1)'
+      }}>
+        <div style={{ display: 'flex', gap: '20px', flexWrap: 'wrap', marginBottom: '20px' }}>
+          {/* Barre de recherche */}
+          <div style={{ flex: '1', minWidth: '300px' }}>
+            <label style={{ 
+              display: 'block', 
+              marginBottom: '8px', 
+              fontWeight: '600',
+              color: '#374151',
+              fontSize: '14px'
+            }}>
+              <span style={{ marginRight: '8px' }}>🔍</span>
+              Recherche
+            </label>
+            <input
+              placeholder="Nom, compétences, spécialités, localisation..."
+              value={q}
+              onChange={e => setQ(e.target.value)}
+              style={{ 
+                padding: '12px 16px', 
+                width: '100%',
+                borderRadius: '10px',
+                border: '2px solid #e5e7eb',
+                fontSize: '15px',
+                backgroundColor: '#f9fafb'
+              }}
+            />
+          </div>
+
+          {/* Filtre spécialité */}
+          <div style={{ minWidth: '200px' }}>
+            <label style={{ 
+              display: 'block', 
+              marginBottom: '8px', 
+              fontWeight: '600',
+              color: '#374151',
+              fontSize: '14px'
+            }}>
+              <span style={{ marginRight: '8px' }}>🎯</span>
+              Spécialité
+            </label>
+            <select
+              value={filters.specialty}
+              onChange={e => handleFilterChange('specialty', e.target.value)}
+              style={{ 
+                padding: '12px 16px', 
+                width: '100%',
+                borderRadius: '10px',
+                border: '2px solid #e5e7eb',
+                fontSize: '15px',
+                backgroundColor: '#f9fafb',
+                cursor: 'pointer'
+              }}
+            >
+              <option value="">Toutes les spécialités</option>
+              <option value="Énergie">Énergie</option>
+              <option value="solaire">Énergie solaire</option>
+              <option value="Smart grid">Smart grid</option>
+              <option value="Hydraulique">Hydraulique</option>
+              <option value="Environnement">Environnement</option>
+              <option value="Agro-industrie">Agro-industrie</option>
+              <option value="Aménagement Forestier">Aménagement Forestier</option>
+              <option value="Sylviculture">Sylviculture</option>
+            </select>
+          </div>
+
+          {/* Filtre localisation */}
+          <div style={{ minWidth: '200px' }}>
+            <label style={{ 
+              display: 'block', 
+              marginBottom: '8px', 
+              fontWeight: '600',
+              color: '#374151',
+              fontSize: '14px'
+            }}>
+              <span style={{ marginRight: '8px' }}>📍</span>
+              Localisation
+            </label>
+            <select
+              value={filters.location}
+              onChange={e => handleFilterChange('location', e.target.value)}
+              style={{ 
+                padding: '12px 16px', 
+                width: '100%',
+                borderRadius: '10px',
+                border: '2px solid #e5e7eb',
+                fontSize: '15px',
+                backgroundColor: '#f9fafb',
+                cursor: 'pointer'
+              }}
+            >
+              <option value="">Toutes les localisations</option>
+              <option value="Douala">Douala</option>
+              <option value="Yaoundé">Yaoundé</option>
+              <option value="Bafoussam">Bafoussam</option>
+              <option value="Ngaoundéré">Ngaoundéré</option>
+            </select>
+          </div>
+
+          {/* Filtre statut */}
+          <div style={{ minWidth: '200px' }}>
+            <label style={{ 
+              display: 'block', 
+              marginBottom: '8px', 
+              fontWeight: '600',
+              color: '#374151',
+              fontSize: '14px'
+            }}>
+              <span style={{ marginRight: '8px' }}>📊</span>
+              Statut
+            </label>
+            <select
+              value={filters.status}
+              onChange={e => handleFilterChange('status', e.target.value)}
+              style={{ 
+                padding: '12px 16px', 
+                width: '100%',
+                borderRadius: '10px',
+                border: '2px solid #e5e7eb',
+                fontSize: '15px',
+                backgroundColor: '#f9fafb',
+                cursor: 'pointer'
+              }}
+            >
+              <option value="">Tous les statuts</option>
+              <option value="Actif">Actif</option>
+              <option value="En attente">En attente</option>
+            </select>
+          </div>
+        </div>
+
+        {/* Actions */}
+        <div style={{ 
+          display: 'flex', 
+          justifyContent: 'space-between', 
+          alignItems: 'center',
+          paddingTop: '16px',
+          borderTop: '1px solid #f3f4f6'
+        }}>
+          <div style={{ 
+            color: '#6b7280', 
+            fontSize: '14px',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '12px'
+          }}>
+            <div style={{
+              padding: '6px 12px',
+              backgroundColor: '#f3f4f6',
+              borderRadius: '20px',
+              fontSize: '13px',
+              fontWeight: '500'
+            }}>
+              {filteredMembers.length} sur {allMembers.length} membres
+            </div>
+            {activeFiltersCount > 0 && (
+              <div style={{
+                padding: '6px 12px',
+                backgroundColor: '#dbeafe',
+                color: '#1e40af',
+                borderRadius: '20px',
+                fontSize: '13px',
+                fontWeight: '500'
+              }}>
+                {activeFiltersCount} filtre(s) actif(s)
+              </div>
+            )}
+          </div>
+          
+          <div style={{ display: 'flex', gap: '12px' }}>
+            <button
+              onClick={handleReload}
+              style={{
+                padding: '10px 20px',
+                backgroundColor: '#3b82f6',
+                color: 'white',
+                border: 'none',
+                borderRadius: '8px',
+                cursor: 'pointer',
+                fontSize: '14px',
+                fontWeight: '500',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '8px'
+              }}
+            >
+              <span>🔄</span>
+              Actualiser
+            </button>
+            
+            <button
+              onClick={handleResetFilters}
+              style={{
+                padding: '10px 20px',
+                backgroundColor: 'transparent',
+                color: '#6b7280',
+                border: '2px solid #e5e7eb',
+                borderRadius: '8px',
+                cursor: 'pointer',
+                fontSize: '14px',
+                fontWeight: '500',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '8px'
+              }}
+            >
+              <span>🗑️</span>
+              Réinitialiser
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {/* État de chargement */}
+      {loading && (
+        <div style={{ 
+          textAlign: 'center', 
+          padding: '60px',
+          color: '#4b5563',
+          backgroundColor: 'white',
+          borderRadius: '16px',
+          border: '1px solid #e5e7eb'
+        }}>
+          <div style={{ 
+            fontSize: '48px', 
+            marginBottom: '16px',
+            animation: 'pulse 2s infinite'
+          }}>⏳</div>
+          <p style={{ fontSize: '16px', fontWeight: '500' }}>Chargement des données...</p>
+          <p style={{ fontSize: '14px', color: '#6b7280', marginTop: '8px' }}>
+            Connexion à la base de données
+          </p>
+        </div>
+      )}
+
+      {/* Liste des membres */}
+      {!loading && (
+        <>
+          {filteredMembers.length === 0 && allMembers.length > 0 ? (
+            <div style={{ 
+              textAlign: 'center', 
+              padding: '60px',
+              color: '#6b7280',
+              backgroundColor: 'white',
+              borderRadius: '16px',
+              border: '1px solid #e5e7eb'
+            }}>
+              <div style={{ 
+                fontSize: '64px', 
+                marginBottom: '20px',
+                opacity: 0.5
+              }}>🔍</div>
+              <h3 style={{ 
+                margin: '0 0 12px 0', 
+                color: '#374151',
+                fontSize: '20px',
+                fontWeight: '600'
+              }}>
+                Aucun membre trouvé
+              </h3>
+              <p style={{ margin: 0, fontSize: '15px' }}>
+                Essayez de modifier vos critères de recherche.
+              </p>
+            </div>
+          ) : filteredMembers.length > 0 ? (
+            <div style={{ 
+              display: 'grid', 
+              gridTemplateColumns: 'repeat(auto-fill, minmax(350px, 1fr))', 
+              gap: '24px'
+            }}>
+              {filteredMembers.map(member => (
+                <MemberCard 
+                  key={member._id} 
+                  member={member}
+                />
+              ))}
+            </div>
+          ) : (
+            <div style={{ 
+              textAlign: 'center', 
+              padding: '60px',
+              color: '#6b7280',
+              backgroundColor: 'white',
+              borderRadius: '16px',
+              border: '1px solid #e5e7eb'
+            }}>
+              <div style={{ 
+                fontSize: '64px', 
+                marginBottom: '20px',
+                opacity: 0.5
+              }}>📭</div>
+              <h3 style={{ 
+                margin: '0 0 12px 0', 
+                color: '#374151',
+                fontSize: '20px',
+                fontWeight: '600'
+              }}>
+                Aucune donnée disponible
+              </h3>
+              <p style={{ margin: 0, fontSize: '15px' }}>
+                {error ? error : 'Les données seront disponibles après configuration.'}
+              </p>
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
 }
