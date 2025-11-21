@@ -1,0 +1,13 @@
+{
+  "name": "appwrite-matrice-function",
+  "version": "1.0.0",
+  "description": "Fonction Appwrite pour la connexion MongoDB Atlas.",
+  "main": "index.js",
+  "type": "module",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "mongodb": "^6.0.0"
+  }
+}
