@@ -1,21 +1,45 @@
 {
   "functions": [
     {
-      "$id": "matrice-api",
-      "name": "matrice-api", 
+      "$id": "get-matrice",
+      "name": "get-matrice (GET All Data)", 
       "runtime": "node-18.0",
-      "path": ".",
-      "entrypoint": "server.js",
+      "path": "functions/get-matrice", // 👈 Chemin vers le dossier de la fonction
+      "entrypoint": "index.js",        // 👈 Le point d'entrée natif
       "ignore": [
         "node_modules",
         ".git",
-        "README.md",
-        "*.log",
-        ".github",
-        "test",
-        "seed"
+        "README.md"
       ],
-      "execute": ["users"],
+      "execute": ["any"],              // Autorise l'exécution par le public/client
+      "timeout": 900
+    },
+    {
+      "$id": "analyses-crud",
+      "name": "analyses-crud (POST/PUT/DELETE)", 
+      "runtime": "node-18.0",
+      "path": "functions/analyses-crud", // 👈 Chemin vers le dossier de la fonction
+      "entrypoint": "index.js",
+      "ignore": [
+        "node_modules",
+        ".git",
+        "README.md"
+      ],
+      "execute": ["users"],             // 👈 Restreindre l'exécution aux utilisateurs logués ou à une clé API
+      "timeout": 900
+    },
+    {
+      "$id": "generic-crud",
+      "name": "generic-crud (Members, Projects, etc.)", 
+      "runtime": "node-18.0",
+      "path": "functions/generic-crud", // 👈 Chemin vers le dossier de la fonction
+      "entrypoint": "index.js",
+      "ignore": [
+        "node_modules",
+        ".git",
+        "README.md"
+      ],
+      "execute": ["users"],             // 👈 Restreindre l'exécution aux utilisateurs logués ou à une clé API
       "timeout": 900
     }
   ]
