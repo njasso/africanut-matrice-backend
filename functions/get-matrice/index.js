@@ -1,6 +1,6 @@
-// functions/get-matrice/src/index.js - VERSION COMPLÈTE OPTIMISÉE
+// functions/get-matrice/src/index.js - VERSION COMPLÈTE OPTIMISÉE AVEC SYNERGIES
 
-import { MongoClient } from "mongodb";
+import { MongoClient, ObjectId } from "mongodb";
 
 // 🔹 CACHE POUR PERFORMANCE
 let cache = null;
@@ -53,6 +53,14 @@ const collectionConfig = {
             type: 1, title: 1, description: 1, from: 1, to: 1, 
             projects: 1, status: 1, participantCount: 1, createdAt: 1
         } 
+    },
+    synergy_analyses: {
+        projection: {
+            type: 1, title: 1, description: 1, analysisData: 1,
+            statistics: 1, timestamp: 1, status: 1, aiEnhanced: 1,
+            membersInvolved: 1, synergyScores: 1, recommendations: 1,
+            createdAt: 1, updatedAt: 1, metadata: 1, source: 1
+        }
     }
 };
 
@@ -138,7 +146,7 @@ const getMostCommonItems = (items, limit = 10) => {
         .map(([item, count]) => ({ item, count }));
 };
 
-const calculateEnhancedStats = (members, projects, groups, skills, specialties) => {
+const calculateEnhancedStats = (members, projects, groups, skills, specialties, synergyAnalyses = []) => {
     const allSkills = members.flatMap(m => m.skills || []);
     const allSpecialties = members.flatMap(m => m.specialties || []);
     
@@ -178,14 +186,27 @@ const calculateEnhancedStats = (members, projects, groups, skills, specialties) 
             mostCommon: getMostCommonItems(allSpecialties, 10),
             totalOccurrences: allSpecialties.length
         },
+        synergyAnalyses: {
+            total: synergyAnalyses.length,
+            aiEnhanced: synergyAnalyses.filter(a => a.aiEnhanced).length,
+            recent: synergyAnalyses.filter(a => {
+                const weekAgo = new Date();
+                weekAgo.setDate(weekAgo.getDate() - 7);
+                return new Date(a.createdAt) > weekAgo;
+            }).length,
+            averageSynergiesPerAnalysis: synergyAnalyses.length > 0 ? 
+                (synergyAnalyses.reduce((sum, a) => sum + (a.synergyScores?.total || 0), 0) / synergyAnalyses.length).toFixed(1) : 0,
+            totalSynergiesAnalyzed: synergyAnalyses.reduce((sum, a) => sum + (a.synergyScores?.total || 0), 0)
+        },
         global: {
-            totalCollections: 7, // membres, projets, groupes, analyses, compétences, spécialités, interactions
+            totalCollections: 8, // membres, projets, groupes, analyses, compétences, spécialités, interactions, synergy_analyses
             lastUpdate: new Date().toISOString(),
             dataQuality: {
                 membersWithCompleteProfile: members.filter(m => 
                     m.name && m.email && m.specialties?.length > 0 && m.skills?.length > 0
                 ).length,
-                projectsWithMembers: projects.filter(p => p.members?.length > 0).length
+                projectsWithMembers: projects.filter(p => p.members?.length > 0).length,
+                savedAnalyses: synergyAnalyses.length
             }
         }
     };
@@ -259,9 +280,66 @@ const getPaginationParams = (req) => {
     return { page, limit, skip, hasPagination: limit > 0 };
 };
 
+// 🔹 FONCTION DE SAUVEGARDE DES ANALYSES DE SYNERGIE
+const saveSynergyAnalysis = async (db, analysisData) => {
+    try {
+        const analysisCollection = db.collection('synergy_analyses');
+        
+        // Validation des données requises
+        if (!analysisData.type || !analysisData.title) {
+            throw new Error("Données d'analyse incomplètes: type et titre requis");
+        }
+
+        const analysisDocument = {
+            type: analysisData.type,
+            title: analysisData.title,
+            description: analysisData.description || 'Analyse de synergies professionnelles',
+            analysisData: analysisData.analysisData || {},
+            statistics: analysisData.statistics || {},
+            timestamp: new Date(),
+            status: 'completed',
+            aiEnhanced: analysisData.statistics?.aiEnhanced || false,
+            membersInvolved: analysisData.statistics?.totalMembers || 0,
+            synergyScores: {
+                average: analysisData.analysisData?.synergies?.reduce((acc, s) => acc + (s.score || 0), 0) / (analysisData.analysisData?.synergies?.length || 1) || 0,
+                highPotential: analysisData.statistics?.highPotentialSynergies || 0,
+                total: analysisData.statistics?.totalSynergies || 0
+            },
+            recommendations: analysisData.analysisData?.projectOpportunities || [],
+            createdAt: new Date(),
+            updatedAt: new Date(),
+            metadata: {
+                version: analysisData.metadata?.version || '2.0.0',
+                aiModel: analysisData.statistics?.aiModel || 'algorithmic',
+                processingTime: analysisData.statistics?.processingTime || 0,
+                source: analysisData.metadata?.source || 'appwrite_function',
+                deepAnalysis: analysisData.metadata?.deepAnalysis || false,
+                membersAnalyzed: analysisData.metadata?.membersAnalyzed || 0
+            }
+        };
+
+        const result = await analysisCollection.insertOne(analysisDocument);
+        console.log(`✅ Analyse de synergie sauvegardée: ${result.insertedId}`, {
+            synergies: analysisDocument.synergyScores.total,
+            aiEnhanced: analysisDocument.aiEnhanced,
+            members: analysisDocument.membersInvolved
+        });
+        
+        return {
+            success: true,
+            analysisId: result.insertedId,
+            timestamp: analysisDocument.timestamp,
+            synergies: analysisDocument.synergyScores.total
+        };
+    } catch (error) {
+        console.error('❌ Erreur sauvegarde analyse:', error);
+        throw error;
+    }
+};
+
 // 🔹 FONCTION PRINCIPALE OPTIMISÉE
 export default async function handler({ req, res, log, error }) {
-    log("🚀 Fonction Appwrite lancée : get-matrice - VERSION OPTIMISÉE");
+    log("🚀 Fonction Appwrite lancée : get-matrice - VERSION COMPLÈTE SYNERGIES");
 
     // 🔹 VÉRIFICATION DU CACHE
     const useCache = req.query?.cache !== 'false';
@@ -298,6 +376,46 @@ export default async function handler({ req, res, log, error }) {
         log(`✅ Connecté à MongoDB - Base: ${DB_NAME}`);
 
         const db = client.db(DB_NAME);
+
+        // 🔹 GESTION DES REQUÊTES DE SAUVEGARDE
+        if (req.method === 'POST' && req.path === '/api/v1/synergy-analysis') {
+            log("💾 Requête de sauvegarde d'analyse reçue");
+            
+            try {
+                let analysisData;
+                if (typeof req.body === 'string') {
+                    analysisData = JSON.parse(req.body);
+                } else if (req.body && typeof req.body === 'object') {
+                    analysisData = req.body;
+                } else {
+                    throw new Error("Format de données invalide");
+                }
+
+                log("📊 Données analyse reçues:", {
+                    type: analysisData.type,
+                    title: analysisData.title,
+                    synergies: analysisData.analysisData?.synergies?.length,
+                    aiEnhanced: analysisData.statistics?.aiEnhanced
+                });
+
+                const result = await saveSynergyAnalysis(db, analysisData);
+                
+                return res.json({
+                    success: true,
+                    message: "Analyse sauvegardée avec succès dans MongoDB Atlas",
+                    ...result,
+                    timestamp: new Date().toISOString()
+                });
+            } catch (saveError) {
+                error("❌ Erreur sauvegarde analyse:", saveError);
+                return res.json({
+                    success: false,
+                    message: "Erreur lors de la sauvegarde de l'analyse",
+                    error: saveError.message,
+                    timestamp: new Date().toISOString()
+                });
+            }
+        }
 
         // 🔹 GESTION DE LA PAGINATION
         const { limit, skip, hasPagination } = getPaginationParams(req);
@@ -345,6 +463,12 @@ export default async function handler({ req, res, log, error }) {
                 .sort({ createdAt: -1 })
                 .skip(hasPagination ? skip : 0)
                 .limit(hasPagination ? limit : 0)
+                .toArray(),
+            
+            synergy_analyses: db.collection('synergy_analyses')
+                .find({}, collectionConfig.synergy_analyses)
+                .sort({ createdAt: -1 })
+                .limit(50) // Limiter aux 50 dernières analyses
                 .toArray()
         };
 
@@ -359,6 +483,7 @@ export default async function handler({ req, res, log, error }) {
         const skills = handleCollectionError(results[4], 'skills', log, error, []);
         const specialties = handleCollectionError(results[5], 'specialties', log, error, []);
         const interactions = handleCollectionError(results[6], 'interactions', log, error, []);
+        const synergyAnalyses = handleCollectionError(results[7], 'synergy_analyses', log, error, []);
 
         // 🔹 VALIDATION DES DONNÉES CRITIQUES
         const validation = validateCriticalData(members, projects);
@@ -369,7 +494,7 @@ export default async function handler({ req, res, log, error }) {
             log(`⚠️ Avertissements: ${validation.warnings.join(', ')}`);
         }
 
-        log(`✅ Données brutes récupérées: ${members.length} membres, ${projects.length} projets`);
+        log(`✅ Données brutes récupérées: ${members.length} membres, ${projects.length} projets, ${synergyAnalyses.length} analyses sauvegardées`);
 
         // 🔹 FORMATAGE OPTIMISÉ DES MEMBRES
         const formattedMembers = formatCollection(members, (member) => {
@@ -438,6 +563,25 @@ export default async function handler({ req, res, log, error }) {
             creationType: group.creationType || 'manual'
         }), 'groupes');
 
+        // 🔹 FORMATAGE DES ANALYSES DE SYNERGIE
+        const formattedSynergyAnalyses = formatCollection(synergyAnalyses, (analysis) => ({
+            _id: analysis._id?.toString(),
+            type: analysis.type || 'professional_synergy_analysis',
+            title: analysis.title || 'Analyse de synergies',
+            description: analysis.description || '',
+            analysisData: analysis.analysisData || {},
+            statistics: analysis.statistics || {},
+            timestamp: analysis.timestamp || analysis.createdAt,
+            status: analysis.status || 'completed',
+            aiEnhanced: analysis.aiEnhanced || false,
+            membersInvolved: analysis.membersInvolved || 0,
+            synergyScores: analysis.synergyScores || {},
+            recommendations: analysis.recommendations || [],
+            createdAt: analysis.createdAt || new Date(),
+            updatedAt: analysis.updatedAt || new Date(),
+            metadata: analysis.metadata || {}
+        }), 'analyses_de_synergie');
+
         // 🔹 FORMATAGE DES AUTRES COLLECTIONS
         const formattedAnalyses = formatCollection(analyses, (analysis) => ({
             _id: analysis._id?.toString(),
@@ -485,7 +629,8 @@ export default async function handler({ req, res, log, error }) {
             formattedProjects, 
             formattedGroups,
             formattedSkills,
-            formattedSpecialties
+            formattedSpecialties,
+            formattedSynergyAnalyses
         );
 
         await client.close();
@@ -508,7 +653,8 @@ export default async function handler({ req, res, log, error }) {
                 analyses: formattedAnalyses,
                 skills: formattedSkills,
                 specialties: formattedSpecialties,
-                interactions: formattedInteractions
+                interactions: formattedInteractions,
+                synergyAnalyses: formattedSynergyAnalyses // Nouvelle collection
             },
 
             // Métadonnées enrichies
@@ -520,7 +666,8 @@ export default async function handler({ req, res, log, error }) {
                     analyses: formattedAnalyses.length,
                     skills: formattedSkills.length,
                     specialties: formattedSpecialties.length,
-                    interactions: formattedInteractions.length
+                    interactions: formattedInteractions.length,
+                    synergyAnalyses: formattedSynergyAnalyses.length
                 },
                 statistics: enhancedStats,
                 pagination: hasPagination ? { limit, skip } : null,
@@ -534,10 +681,16 @@ export default async function handler({ req, res, log, error }) {
                     processingTime: Date.now() - (cacheTimestamp || Date.now())
                 },
                 database: DB_NAME,
-                version: '3.0.0'
+                version: '3.1.0',
+                features: {
+                    synergyAnalysis: true,
+                    aiIntegration: true,
+                    realTimeUpdates: true,
+                    advancedStatistics: true
+                }
             },
             
-            message: `Données chargées avec succès: ${formattedMembers.length} membres, ${formattedProjects.length} projets, ${formattedGroups.length} groupes`
+            message: `Données chargées avec succès: ${formattedMembers.length} membres, ${formattedProjects.length} projets, ${formattedSynergyAnalyses.length} analyses sauvegardées`
         };
 
         // 🔹 MISE EN CACHE
@@ -547,7 +700,7 @@ export default async function handler({ req, res, log, error }) {
             log("✅ Données mises en cache pour 5 minutes");
         }
 
-        log(`✅ Réponse préparée: ${formattedMembers.length} membres, ${formattedProjects.length} projets`);
+        log(`✅ Réponse préparée: ${formattedMembers.length} membres, ${formattedProjects.length} projets, ${formattedSynergyAnalyses.length} analyses`);
         return res.json(responseData);
 
     } catch (err) {
@@ -564,8 +717,32 @@ export default async function handler({ req, res, log, error }) {
             fallbackData: {
                 members: [],
                 projects: [],
-                groups: []
+                groups: [],
+                synergyAnalyses: []
             }
         });
     }
 }
+
+// 🔹 FONCTION DE SAUVEGARDE DIRECTE POUR TESTS
+export const saveSynergyAnalysisDirect = async (analysisData) => {
+    const MONGO_URI = process.env.MONGODB_URI;
+    const DB_NAME = process.env.MONGODB_DB_NAME || "matrice";
+    
+    if (!MONGO_URI) {
+        throw new Error("MONGODB_URI manquante");
+    }
+
+    let client;
+    try {
+        client = new MongoClient(MONGO_URI);
+        await client.connect();
+        const db = client.db(DB_NAME);
+        
+        return await saveSynergyAnalysis(db, analysisData);
+    } finally {
+        if (client) {
+            await client.close();
+        }
+    }
+};
