@@ -1,4 +1,4 @@
-// functions/get-matrice/src/index.js - VERSION COMPLÈTE OPTIMISÉE AVEC SYNERGIES
+// functions/get-matrice/src/index.js - VERSION COMPLÈTE CRUD
 
 import { MongoClient, ObjectId } from "mongodb";
 
@@ -7,7 +7,7 @@ let cache = null;
 let cacheTimestamp = null;
 const CACHE_DURATION = 5 * 60 * 1000; // 5 minutes
 
-// 🔹 CONFIGURATION DES PROJECTIONS POUR OPTIMISATION
+// 🔹 CONFIGURATION DES PROJECTIONS
 const collectionConfig = {
     members: { 
         projection: { 
@@ -64,306 +64,780 @@ const collectionConfig = {
     }
 };
 
-// 🔹 FONCTION UNIVERSELLE DE NETTOYAGE DES TABLEAUX
+// 🔹 UTILITAIRES
 const cleanArray = (data, fieldName = '') => {
-    if (!data) {
-        console.log(`🔸 ${fieldName}: données nulles, retour tableau vide`);
-        return [];
-    }
-
-    // Si c'est déjà un tableau
+    if (!data) return [];
     if (Array.isArray(data)) {
-        const cleaned = data
-            .map(item => {
-                if (typeof item === 'string') return item.trim();
-                if (item && typeof item === 'object' && item.name) return item.name.trim();
-                return String(item).trim();
-            })
-            .filter(item => item && item !== '' && item !== 'null' && item !== 'undefined');
-        
-        console.log(`🔸 ${fieldName}: tableau de ${data.length} → ${cleaned.length} éléments après nettoyage`);
-        return cleaned;
+        return data.map(item => {
+            if (typeof item === 'string') return item.trim();
+            if (item && typeof item === 'object' && item.name) return item.name.trim();
+            return String(item).trim();
+        }).filter(item => item && item !== '' && item !== 'null' && item !== 'undefined');
     }
-
-    // Si c'est une chaîne avec séparateurs
     if (typeof data === 'string') {
-        const cleaned = data
-            .split(/[,;|]/)
-            .map(item => item.trim())
-            .filter(item => item && item !== '' && item !== 'null' && item !== 'undefined');
-        
-        console.log(`🔸 ${fieldName}: chaîne "${data.substring(0, 50)}..." → ${cleaned.length} éléments`);
-        return cleaned;
+        return data.split(/[,;|]/).map(item => item.trim()).filter(item => item && item !== '' && item !== 'null' && item !== 'undefined');
     }
-
-    // Cas par défaut
     return [String(data).trim()].filter(item => item && item !== '' && item !== 'null' && item !== 'undefined');
 };
 
-// 🔹 FONCTION DE FORMATAGE GÉNÉRIQUE DES COLLECTIONS
-const formatCollection = (collection, mapper, collectionName = 'items') => {
-    if (!Array.isArray(collection)) {
-        console.log(`⚠️ ${collectionName}: collection non-tableau, conversion`);
-        return [];
-    }
-
-    const formatted = collection
-        .map((item, index) => {
-            try {
-                return mapper(item, index);
-            } catch (error) {
-                console.error(`❌ Erreur formatage ${collectionName}[${index}]:`, error.message);
-                return null;
-            }
-        })
-        .filter(item => item !== null);
-
-    console.log(`✅ ${collectionName}: ${collection.length} → ${formatted.length} éléments formatés`);
-    return formatted;
-};
-
-// 🔹 GESTION ROBUSTE DES ERREURS PAR COLLECTION
-const handleCollectionError = (result, collectionName, log, error, fallback = []) => {
-    if (result.status === 'fulfilled') {
-        log(`✅ Collection ${collectionName} chargée: ${result.value.length} éléments`);
-        return result.value;
-    } else {
-        error(`❌ Collection ${collectionName} inaccessible: ${result.reason?.message}`);
-        return fallback;
-    }
-};
-
-// 🔹 CALCUL DES STATISTIQUES AVANCÉES
-const getMostCommonItems = (items, limit = 10) => {
-    const frequency = {};
-    items.forEach(item => {
-        frequency[item] = (frequency[item] || 0) + 1;
-    });
-    
-    return Object.entries(frequency)
-        .sort(([,a], [,b]) => b - a)
-        .slice(0, limit)
-        .map(([item, count]) => ({ item, count }));
-};
-
-const calculateEnhancedStats = (members, projects, groups, skills, specialties, synergyAnalyses = []) => {
-    const allSkills = members.flatMap(m => m.skills || []);
-    const allSpecialties = members.flatMap(m => m.specialties || []);
-    
-    const stats = {
-        members: {
-            total: members.length,
-            active: members.filter(m => m.isActive !== false).length,
-            withSpecialties: members.filter(m => m.specialties && m.specialties.length > 0).length,
-            withSkills: members.filter(m => m.skills && m.skills.length > 0).length,
-            withBoth: members.filter(m => 
-                m.specialties && m.specialties.length > 0 && 
-                m.skills && m.skills.length > 0
-            ).length,
-            withProjects: members.filter(m => m.projects && m.projects.trim() !== '').length,
-            byOrganization: Object.groupBy(members, m => m.organization || 'Non renseigné')
-        },
-        projects: {
-            total: projects.length,
-            byStatus: Object.groupBy(projects, p => p.status || 'idea'),
-            averageMembersPerProject: projects.length > 0 ? 
-                (projects.reduce((sum, p) => sum + (p.members?.length || 0), 0) / projects.length).toFixed(1) : 0
-        },
-        groups: {
-            total: groups.length,
-            byType: Object.groupBy(groups, g => g.type || 'technique'),
-            averageMembersPerGroup: groups.length > 0 ? 
-                (groups.reduce((sum, g) => sum + (g.members?.length || 0), 0) / groups.length).toFixed(1) : 0,
-            autoCreated: groups.filter(g => g.autoCreated).length
-        },
-        skills: {
-            totalUnique: [...new Set(allSkills)].length,
-            mostCommon: getMostCommonItems(allSkills, 10),
-            totalOccurrences: allSkills.length
-        },
-        specialties: {
-            totalUnique: [...new Set(allSpecialties)].length,
-            mostCommon: getMostCommonItems(allSpecialties, 10),
-            totalOccurrences: allSpecialties.length
-        },
-        synergyAnalyses: {
-            total: synergyAnalyses.length,
-            aiEnhanced: synergyAnalyses.filter(a => a.aiEnhanced).length,
-            recent: synergyAnalyses.filter(a => {
-                const weekAgo = new Date();
-                weekAgo.setDate(weekAgo.getDate() - 7);
-                return new Date(a.createdAt) > weekAgo;
-            }).length,
-            averageSynergiesPerAnalysis: synergyAnalyses.length > 0 ? 
-                (synergyAnalyses.reduce((sum, a) => sum + (a.synergyScores?.total || 0), 0) / synergyAnalyses.length).toFixed(1) : 0,
-            totalSynergiesAnalyzed: synergyAnalyses.reduce((sum, a) => sum + (a.synergyScores?.total || 0), 0)
-        },
-        global: {
-            totalCollections: 8, // membres, projets, groupes, analyses, compétences, spécialités, interactions, synergy_analyses
-            lastUpdate: new Date().toISOString(),
-            dataQuality: {
-                membersWithCompleteProfile: members.filter(m => 
-                    m.name && m.email && m.specialties?.length > 0 && m.skills?.length > 0
-                ).length,
-                projectsWithMembers: projects.filter(p => p.members?.length > 0).length,
-                savedAnalyses: synergyAnalyses.length
-            }
-        }
-    };
-    
-    return stats;
-};
-
-// 🔹 VALIDATION DES DONNÉES CRITIQUES
-const validateCriticalData = (members, projects) => {
-    const errors = [];
-    const warnings = [];
-    
-    if (!Array.isArray(members)) {
-        errors.push("Les membres doivent être un tableau");
-    }
-    
-    if (!Array.isArray(projects)) {
-        errors.push("Les projets doivent être un tableau");
-    }
-    
-    // Vérifier la cohérence des références
-    const allMemberIds = new Set(members.map(m => m._id));
-    const projectsWithInvalidMembers = projects.filter(project => 
-        project.members && project.members.some(memberId => !allMemberIds.has(memberId))
-    );
-    
-    if (projectsWithInvalidMembers.length > 0) {
-        warnings.push(`${projectsWithInvalidMembers.length} projets avec des références de membres invalides`);
-    }
-    
-    // Vérifier les données manquantes critiques
-    const membersWithoutName = members.filter(m => !m.name || m.name === 'Nom non renseigné');
-    if (membersWithoutName.length > 0) {
-        warnings.push(`${membersWithoutName.length} membres sans nom valide`);
-    }
-    
-    return { errors, warnings };
-};
-
-// 🔹 CORRECTION ET VALIDATION URL PHOTO
 const processPhotoUrl = (photoUrl) => {
     if (!photoUrl || typeof photoUrl !== 'string') return '';
-
-    // Correction des chemins relatifs
     if (photoUrl.startsWith('../assets/photos/')) {
         return photoUrl.replace('../assets/photos/', '/assets/photos/');
     }
-
-    // Ajout du slash initial si manquant pour les chemins locaux
     if (photoUrl.startsWith('assets/photos/') && !photoUrl.startsWith('/')) {
         return '/' + photoUrl;
     }
-
-    // Validation URL
     try {
         new URL(photoUrl);
-        return photoUrl; // URL absolue valide
+        return photoUrl;
     } catch {
-        // URL relative, la retourner telle quelle
         return photoUrl;
     }
 };
 
-// 🔹 GESTION DE LA PAGINATION
 const getPaginationParams = (req) => {
     const query = req.query || {};
     const page = Math.max(1, parseInt(query.page) || 1);
-    const limit = Math.min(100, Math.max(1, parseInt(query.limit) || 0)); // 0 = pas de limite
+    const limit = Math.min(100, Math.max(1, parseInt(query.limit) || 0));
     const skip = (page - 1) * limit;
-    
     return { page, limit, skip, hasPagination: limit > 0 };
 };
 
-// 🔹 FONCTION DE SAUVEGARDE DES ANALYSES DE SYNERGIE
-const saveSynergyAnalysis = async (db, analysisData) => {
+const validateObjectId = (id) => {
+    if (!id) return false;
     try {
-        const analysisCollection = db.collection('synergy_analyses');
-        
-        // Validation des données requises
-        if (!analysisData.type || !analysisData.title) {
-            throw new Error("Données d'analyse incomplètes: type et titre requis");
-        }
-
-        const analysisDocument = {
-            type: analysisData.type,
-            title: analysisData.title,
-            description: analysisData.description || 'Analyse de synergies professionnelles',
-            analysisData: analysisData.analysisData || {},
-            statistics: analysisData.statistics || {},
-            timestamp: new Date(),
-            status: 'completed',
-            aiEnhanced: analysisData.statistics?.aiEnhanced || false,
-            membersInvolved: analysisData.statistics?.totalMembers || 0,
-            synergyScores: {
-                average: analysisData.analysisData?.synergies?.reduce((acc, s) => acc + (s.score || 0), 0) / (analysisData.analysisData?.synergies?.length || 1) || 0,
-                highPotential: analysisData.statistics?.highPotentialSynergies || 0,
-                total: analysisData.statistics?.totalSynergies || 0
-            },
-            recommendations: analysisData.analysisData?.projectOpportunities || [],
-            createdAt: new Date(),
-            updatedAt: new Date(),
-            metadata: {
-                version: analysisData.metadata?.version || '2.0.0',
-                aiModel: analysisData.statistics?.aiModel || 'algorithmic',
-                processingTime: analysisData.statistics?.processingTime || 0,
-                source: analysisData.metadata?.source || 'appwrite_function',
-                deepAnalysis: analysisData.metadata?.deepAnalysis || false,
-                membersAnalyzed: analysisData.metadata?.membersAnalyzed || 0
-            }
-        };
-
-        const result = await analysisCollection.insertOne(analysisDocument);
-        console.log(`✅ Analyse de synergie sauvegardée: ${result.insertedId}`, {
-            synergies: analysisDocument.synergyScores.total,
-            aiEnhanced: analysisDocument.aiEnhanced,
-            members: analysisDocument.membersInvolved
-        });
-        
-        return {
-            success: true,
-            analysisId: result.insertedId,
-            timestamp: analysisDocument.timestamp,
-            synergies: analysisDocument.synergyScores.total
-        };
-    } catch (error) {
-        console.error('❌ Erreur sauvegarde analyse:', error);
-        throw error;
+        new ObjectId(id);
+        return true;
+    } catch {
+        return false;
     }
 };
 
-// 🔹 FONCTION PRINCIPALE OPTIMISÉE
-export default async function handler({ req, res, log, error }) {
-    log("🚀 Fonction Appwrite lancée : get-matrice - VERSION COMPLÈTE SYNERGIES");
-
-    // 🔹 VÉRIFICATION DU CACHE
-    const useCache = req.query?.cache !== 'false';
-    if (useCache && cache && cacheTimestamp && (Date.now() - cacheTimestamp) < CACHE_DURATION) {
-        log("✅ Retour des données en cache");
-        return res.json({
-            ...cache,
-            metadata: {
-                ...cache.metadata,
-                cached: true,
-                cacheAge: Math.round((Date.now() - cacheTimestamp) / 1000)
-            }
-        });
+const parseRequestBody = (body) => {
+    if (!body) return {};
+    if (typeof body === 'object') return body;
+    if (typeof body === 'string') {
+        try {
+            return JSON.parse(body);
+        } catch {
+            return {};
+        }
     }
+    return {};
+};
+
+// 🔹 CRUD POUR MEMBRES
+const membersCRUD = {
+    async getAll(db, { skip = 0, limit = 0 } = {}) {
+        const members = await db.collection('members')
+            .find({}, collectionConfig.members)
+            .skip(skip)
+            .limit(limit)
+            .toArray();
+        return members.map(member => ({
+            ...member,
+            _id: member._id.toString(),
+            specialties: cleanArray(member.specialties),
+            skills: cleanArray(member.skills)
+        }));
+    },
+
+    async getById(db, id) {
+        if (!validateObjectId(id)) throw new Error('ID membre invalide');
+        const member = await db.collection('members').findOne({ _id: new ObjectId(id) }, collectionConfig.members);
+        if (!member) throw new Error('Membre non trouvé');
+        return {
+            ...member,
+            _id: member._id.toString(),
+            specialties: cleanArray(member.specialties),
+            skills: cleanArray(member.skills)
+        };
+    },
+
+    async create(db, data) {
+        const memberData = {
+            name: data.name || 'Nom non renseigné',
+            title: data.title || '',
+            email: data.email || '',
+            phone: data.phone || '',
+            specialties: cleanArray(data.specialties, 'specialties'),
+            skills: cleanArray(data.skills, 'skills'),
+            location: data.location || '',
+            organization: data.organization || '',
+            entreprise: data.entreprise || '',
+            experienceYears: data.experienceYears || 0,
+            projects: data.projects || '',
+            availability: data.availability || '',
+            statutMembre: data.statutMembre || 'Actif',
+            photo: processPhotoUrl(data.photo),
+            cvLink: data.cvLink || '',
+            linkedin: data.linkedin || '',
+            isActive: data.isActive !== undefined ? data.isActive : true,
+            createdAt: new Date(),
+            updatedAt: new Date()
+        };
+
+        const result = await db.collection('members').insertOne(memberData);
+        return { ...memberData, _id: result.insertedId.toString() };
+    },
+
+    async update(db, id, data) {
+        if (!validateObjectId(id)) throw new Error('ID membre invalide');
+        
+        const updateData = { updatedAt: new Date() };
+        
+        // Champs modifiables
+        if (data.name !== undefined) updateData.name = data.name;
+        if (data.title !== undefined) updateData.title = data.title;
+        if (data.email !== undefined) updateData.email = data.email;
+        if (data.phone !== undefined) updateData.phone = data.phone;
+        if (data.specialties !== undefined) updateData.specialties = cleanArray(data.specialties, 'specialties');
+        if (data.skills !== undefined) updateData.skills = cleanArray(data.skills, 'skills');
+        if (data.location !== undefined) updateData.location = data.location;
+        if (data.organization !== undefined) updateData.organization = data.organization;
+        if (data.entreprise !== undefined) updateData.entreprise = data.entreprise;
+        if (data.experienceYears !== undefined) updateData.experienceYears = data.experienceYears;
+        if (data.projects !== undefined) updateData.projects = data.projects;
+        if (data.availability !== undefined) updateData.availability = data.availability;
+        if (data.statutMembre !== undefined) updateData.statutMembre = data.statutMembre;
+        if (data.photo !== undefined) updateData.photo = processPhotoUrl(data.photo);
+        if (data.cvLink !== undefined) updateData.cvLink = data.cvLink;
+        if (data.linkedin !== undefined) updateData.linkedin = data.linkedin;
+        if (data.isActive !== undefined) updateData.isActive = data.isActive;
+
+        const result = await db.collection('members').updateOne(
+            { _id: new ObjectId(id) },
+            { $set: updateData }
+        );
+
+        if (result.matchedCount === 0) throw new Error('Membre non trouvé');
+        return await this.getById(db, id);
+    },
+
+    async delete(db, id) {
+        if (!validateObjectId(id)) throw new Error('ID membre invalide');
+        const result = await db.collection('members').deleteOne({ _id: new ObjectId(id) });
+        if (result.deletedCount === 0) throw new Error('Membre non trouvé');
+        return { message: 'Membre supprimé avec succès', id };
+    }
+};
+
+// 🔹 CRUD POUR PROJETS
+const projectsCRUD = {
+    async getAll(db, { skip = 0, limit = 0 } = {}) {
+        const projects = await db.collection('projects')
+            .find({}, collectionConfig.projects)
+            .sort({ createdAt: -1 })
+            .skip(skip)
+            .limit(limit)
+            .toArray();
+        return projects.map(project => ({
+            ...project,
+            _id: project._id.toString(),
+            members: project.members ? project.members.map(m => m.toString()) : []
+        }));
+    },
+
+    async getById(db, id) {
+        if (!validateObjectId(id)) throw new Error('ID projet invalide');
+        const project = await db.collection('projects').findOne({ _id: new ObjectId(id) }, collectionConfig.projects);
+        if (!project) throw new Error('Projet non trouvé');
+        return {
+            ...project,
+            _id: project._id.toString(),
+            members: project.members ? project.members.map(m => m.toString()) : []
+        };
+    },
+
+    async create(db, data) {
+        const projectData = {
+            title: data.title || 'Sans titre',
+            description: data.description || '',
+            members: Array.isArray(data.members) ? data.members.map(m => m.toString()).filter(Boolean) : [],
+            status: data.status || 'idea',
+            organization: data.organization || '',
+            tags: Array.isArray(data.tags) ? data.tags : [],
+            createdAt: new Date(),
+            updatedAt: new Date(),
+            importedFromMember: data.importedFromMember || false,
+            memberSource: data.memberSource || ''
+        };
+
+        const result = await db.collection('projects').insertOne(projectData);
+        return { ...projectData, _id: result.insertedId.toString() };
+    },
+
+    async update(db, id, data) {
+        if (!validateObjectId(id)) throw new Error('ID projet invalide');
+        
+        const updateData = { updatedAt: new Date() };
+        
+        if (data.title !== undefined) updateData.title = data.title;
+        if (data.description !== undefined) updateData.description = data.description;
+        if (data.members !== undefined) updateData.members = Array.isArray(data.members) ? data.members.map(m => m.toString()).filter(Boolean) : [];
+        if (data.status !== undefined) updateData.status = data.status;
+        if (data.organization !== undefined) updateData.organization = data.organization;
+        if (data.tags !== undefined) updateData.tags = Array.isArray(data.tags) ? data.tags : [];
+        if (data.importedFromMember !== undefined) updateData.importedFromMember = data.importedFromMember;
+        if (data.memberSource !== undefined) updateData.memberSource = data.memberSource;
+
+        const result = await db.collection('projects').updateOne(
+            { _id: new ObjectId(id) },
+            { $set: updateData }
+        );
+
+        if (result.matchedCount === 0) throw new Error('Projet non trouvé');
+        return await this.getById(db, id);
+    },
+
+    async delete(db, id) {
+        if (!validateObjectId(id)) throw new Error('ID projet invalide');
+        const result = await db.collection('projects').deleteOne({ _id: new ObjectId(id) });
+        if (result.deletedCount === 0) throw new Error('Projet non trouvé');
+        return { message: 'Projet supprimé avec succès', id };
+    }
+};
+
+// 🔹 CRUD POUR GROUPES
+const groupsCRUD = {
+    async getAll(db, { skip = 0, limit = 0 } = {}) {
+        const groups = await db.collection('groups')
+            .find({}, collectionConfig.groups)
+            .skip(skip)
+            .limit(limit)
+            .toArray();
+        return groups.map(group => ({
+            ...group,
+            _id: group._id.toString(),
+            members: group.members ? group.members.map(m => m.toString()) : [],
+            leader: group.leader ? group.leader.toString() : null
+        }));
+    },
+
+    async getById(db, id) {
+        if (!validateObjectId(id)) throw new Error('ID groupe invalide');
+        const group = await db.collection('groups').findOne({ _id: new ObjectId(id) }, collectionConfig.groups);
+        if (!group) throw new Error('Groupe non trouvé');
+        return {
+            ...group,
+            _id: group._id.toString(),
+            members: group.members ? group.members.map(m => m.toString()) : [],
+            leader: group.leader ? group.leader.toString() : null
+        };
+    },
+
+    async create(db, data) {
+        const groupData = {
+            name: data.name || '',
+            description: data.description || '',
+            type: data.type || 'technique',
+            privacy: data.privacy || 'public',
+            tags: Array.isArray(data.tags) ? data.tags : [],
+            members: Array.isArray(data.members) ? data.members.map(m => m.toString()).filter(Boolean) : [],
+            leader: data.leader ? data.leader.toString() : null,
+            memberCount: Array.isArray(data.members) ? data.members.length : 0,
+            autoCreated: data.autoCreated || false,
+            creationType: data.creationType || 'manual',
+            createdAt: new Date(),
+            updatedAt: new Date()
+        };
+
+        const result = await db.collection('groups').insertOne(groupData);
+        return { ...groupData, _id: result.insertedId.toString() };
+    },
+
+    async update(db, id, data) {
+        if (!validateObjectId(id)) throw new Error('ID groupe invalide');
+        
+        const updateData = { updatedAt: new Date() };
+        
+        if (data.name !== undefined) updateData.name = data.name;
+        if (data.description !== undefined) updateData.description = data.description;
+        if (data.type !== undefined) updateData.type = data.type;
+        if (data.privacy !== undefined) updateData.privacy = data.privacy;
+        if (data.tags !== undefined) updateData.tags = Array.isArray(data.tags) ? data.tags : [];
+        if (data.members !== undefined) {
+            updateData.members = Array.isArray(data.members) ? data.members.map(m => m.toString()).filter(Boolean) : [];
+            updateData.memberCount = updateData.members.length;
+        }
+        if (data.leader !== undefined) updateData.leader = data.leader ? data.leader.toString() : null;
+        if (data.autoCreated !== undefined) updateData.autoCreated = data.autoCreated;
+        if (data.creationType !== undefined) updateData.creationType = data.creationType;
+
+        const result = await db.collection('groups').updateOne(
+            { _id: new ObjectId(id) },
+            { $set: updateData }
+        );
+
+        if (result.matchedCount === 0) throw new Error('Groupe non trouvé');
+        return await this.getById(db, id);
+    },
+
+    async delete(db, id) {
+        if (!validateObjectId(id)) throw new Error('ID groupe invalide');
+        const result = await db.collection('groups').deleteOne({ _id: new ObjectId(id) });
+        if (result.deletedCount === 0) throw new Error('Groupe non trouvé');
+        return { message: 'Groupe supprimé avec succès', id };
+    }
+};
+
+// 🔹 CRUD POUR ANALYSES
+const analysesCRUD = {
+    async getAll(db, { skip = 0, limit = 0 } = {}) {
+        const analyses = await db.collection('analyses')
+            .find({}, collectionConfig.analyses)
+            .sort({ createdAt: -1 })
+            .skip(skip)
+            .limit(limit)
+            .toArray();
+        return analyses.map(analysis => ({
+            ...analysis,
+            _id: analysis._id.toString(),
+            suggestions: Array.isArray(analysis.suggestions) ? analysis.suggestions : []
+        }));
+    },
+
+    async getById(db, id) {
+        if (!validateObjectId(id)) throw new Error('ID analyse invalide');
+        const analysis = await db.collection('analyses').findOne({ _id: new ObjectId(id) }, collectionConfig.analyses);
+        if (!analysis) throw new Error('Analyse non trouvée');
+        return {
+            ...analysis,
+            _id: analysis._id.toString(),
+            suggestions: Array.isArray(analysis.suggestions) ? analysis.suggestions : []
+        };
+    },
+
+    async create(db, data) {
+        const analysisData = {
+            type: data.type || 'interaction_analysis',
+            title: data.title || '',
+            description: data.description || '',
+            insights: data.insights || {},
+            suggestions: Array.isArray(data.suggestions) ? data.suggestions : [],
+            statistics: data.statistics || {},
+            status: data.status || 'completed',
+            analysisTimestamp: data.analysisTimestamp || new Date(),
+            createdAt: new Date(),
+            updatedAt: new Date()
+        };
+
+        const result = await db.collection('analyses').insertOne(analysisData);
+        return { ...analysisData, _id: result.insertedId.toString() };
+    },
+
+    async update(db, id, data) {
+        if (!validateObjectId(id)) throw new Error('ID analyse invalide');
+        
+        const updateData = { updatedAt: new Date() };
+        
+        if (data.type !== undefined) updateData.type = data.type;
+        if (data.title !== undefined) updateData.title = data.title;
+        if (data.description !== undefined) updateData.description = data.description;
+        if (data.insights !== undefined) updateData.insights = data.insights;
+        if (data.suggestions !== undefined) updateData.suggestions = Array.isArray(data.suggestions) ? data.suggestions : [];
+        if (data.statistics !== undefined) updateData.statistics = data.statistics;
+        if (data.status !== undefined) updateData.status = data.status;
+        if (data.analysisTimestamp !== undefined) updateData.analysisTimestamp = data.analysisTimestamp;
+
+        const result = await db.collection('analyses').updateOne(
+            { _id: new ObjectId(id) },
+            { $set: updateData }
+        );
+
+        if (result.matchedCount === 0) throw new Error('Analyse non trouvée');
+        return await this.getById(db, id);
+    },
+
+    async delete(db, id) {
+        if (!validateObjectId(id)) throw new Error('ID analyse invalide');
+        const result = await db.collection('analyses').deleteOne({ _id: new ObjectId(id) });
+        if (result.deletedCount === 0) throw new Error('Analyse non trouvée');
+        return { message: 'Analyse supprimée avec succès', id };
+    }
+};
+
+// 🔹 CRUD POUR COMPÉTENCES
+const skillsCRUD = {
+    async getAll(db) {
+        const skills = await db.collection('skills')
+            .find({}, collectionConfig.skills)
+            .toArray();
+        return skills.map(skill => ({
+            ...skill,
+            _id: skill._id.toString()
+        }));
+    },
+
+    async getById(db, id) {
+        if (!validateObjectId(id)) throw new Error('ID compétence invalide');
+        const skill = await db.collection('skills').findOne({ _id: new ObjectId(id) }, collectionConfig.skills);
+        if (!skill) throw new Error('Compétence non trouvée');
+        return { ...skill, _id: skill._id.toString() };
+    },
+
+    async create(db, data) {
+        const skillData = {
+            name: data.name || '',
+            category: data.category || 'technique',
+            description: data.description || '',
+            memberCount: data.memberCount || 0,
+            createdAt: new Date(),
+            updatedAt: new Date()
+        };
+
+        const result = await db.collection('skills').insertOne(skillData);
+        return { ...skillData, _id: result.insertedId.toString() };
+    },
+
+    async update(db, id, data) {
+        if (!validateObjectId(id)) throw new Error('ID compétence invalide');
+        
+        const updateData = { updatedAt: new Date() };
+        
+        if (data.name !== undefined) updateData.name = data.name;
+        if (data.category !== undefined) updateData.category = data.category;
+        if (data.description !== undefined) updateData.description = data.description;
+        if (data.memberCount !== undefined) updateData.memberCount = data.memberCount;
+
+        const result = await db.collection('skills').updateOne(
+            { _id: new ObjectId(id) },
+            { $set: updateData }
+        );
+
+        if (result.matchedCount === 0) throw new Error('Compétence non trouvée');
+        return await this.getById(db, id);
+    },
+
+    async delete(db, id) {
+        if (!validateObjectId(id)) throw new Error('ID compétence invalide');
+        const result = await db.collection('skills').deleteOne({ _id: new ObjectId(id) });
+        if (result.deletedCount === 0) throw new Error('Compétence non trouvée');
+        return { message: 'Compétence supprimée avec succès', id };
+    }
+};
+
+// 🔹 CRUD POUR SPÉCIALITÉS
+const specialtiesCRUD = {
+    async getAll(db) {
+        const specialties = await db.collection('specialties')
+            .find({}, collectionConfig.specialties)
+            .toArray();
+        return specialties.map(specialty => ({
+            ...specialty,
+            _id: specialty._id.toString()
+        }));
+    },
+
+    async getById(db, id) {
+        if (!validateObjectId(id)) throw new Error('ID spécialité invalide');
+        const specialty = await db.collection('specialties').findOne({ _id: new ObjectId(id) }, collectionConfig.specialties);
+        if (!specialty) throw new Error('Spécialité non trouvée');
+        return { ...specialty, _id: specialty._id.toString() };
+    },
+
+    async create(db, data) {
+        const specialtyData = {
+            name: data.name || '',
+            category: data.category || 'technique',
+            description: data.description || '',
+            memberCount: data.memberCount || 0,
+            createdAt: new Date(),
+            updatedAt: new Date()
+        };
+
+        const result = await db.collection('specialties').insertOne(specialtyData);
+        return { ...specialtyData, _id: result.insertedId.toString() };
+    },
+
+    async update(db, id, data) {
+        if (!validateObjectId(id)) throw new Error('ID spécialité invalide');
+        
+        const updateData = { updatedAt: new Date() };
+        
+        if (data.name !== undefined) updateData.name = data.name;
+        if (data.category !== undefined) updateData.category = data.category;
+        if (data.description !== undefined) updateData.description = data.description;
+        if (data.memberCount !== undefined) updateData.memberCount = data.memberCount;
+
+        const result = await db.collection('specialties').updateOne(
+            { _id: new ObjectId(id) },
+            { $set: updateData }
+        );
+
+        if (result.matchedCount === 0) throw new Error('Spécialité non trouvée');
+        return await this.getById(db, id);
+    },
+
+    async delete(db, id) {
+        if (!validateObjectId(id)) throw new Error('ID spécialité invalide');
+        const result = await db.collection('specialties').deleteOne({ _id: new ObjectId(id) });
+        if (result.deletedCount === 0) throw new Error('Spécialité non trouvée');
+        return { message: 'Spécialité supprimée avec succès', id };
+    }
+};
+
+// 🔹 CRUD POUR INTERACTIONS
+const interactionsCRUD = {
+    async getAll(db, { skip = 0, limit = 0 } = {}) {
+        const interactions = await db.collection('interactions')
+            .find({}, collectionConfig.interactions)
+            .sort({ createdAt: -1 })
+            .skip(skip)
+            .limit(limit)
+            .toArray();
+        return interactions.map(interaction => ({
+            ...interaction,
+            _id: interaction._id.toString(),
+            from: interaction.from ? interaction.from.toString() : '',
+            to: interaction.to ? interaction.to.map(t => t.toString()) : [],
+            projects: interaction.projects ? interaction.projects.map(p => p.toString()) : []
+        }));
+    },
+
+    async getById(db, id) {
+        if (!validateObjectId(id)) throw new Error('ID interaction invalide');
+        const interaction = await db.collection('interactions').findOne({ _id: new ObjectId(id) }, collectionConfig.interactions);
+        if (!interaction) throw new Error('Interaction non trouvée');
+        return {
+            ...interaction,
+            _id: interaction._id.toString(),
+            from: interaction.from ? interaction.from.toString() : '',
+            to: interaction.to ? interaction.to.map(t => t.toString()) : [],
+            projects: interaction.projects ? interaction.projects.map(p => p.toString()) : []
+        };
+    },
+
+    async create(db, data) {
+        const interactionData = {
+            type: data.type || 'message',
+            title: data.title || '',
+            description: data.description || '',
+            from: data.from ? data.from.toString() : '',
+            to: Array.isArray(data.to) ? data.to.map(t => t.toString()).filter(Boolean) : [],
+            projects: Array.isArray(data.projects) ? data.projects.map(p => p.toString()).filter(Boolean) : [],
+            status: data.status || 'pending',
+            participantCount: 1 + (Array.isArray(data.to) ? data.to.length : 0),
+            createdAt: new Date(),
+            updatedAt: new Date()
+        };
+
+        const result = await db.collection('interactions').insertOne(interactionData);
+        return { ...interactionData, _id: result.insertedId.toString() };
+    },
+
+    async update(db, id, data) {
+        if (!validateObjectId(id)) throw new Error('ID interaction invalide');
+        
+        const updateData = { updatedAt: new Date() };
+        
+        if (data.type !== undefined) updateData.type = data.type;
+        if (data.title !== undefined) updateData.title = data.title;
+        if (data.description !== undefined) updateData.description = data.description;
+        if (data.from !== undefined) updateData.from = data.from ? data.from.toString() : '';
+        if (data.to !== undefined) {
+            updateData.to = Array.isArray(data.to) ? data.to.map(t => t.toString()).filter(Boolean) : [];
+            updateData.participantCount = 1 + updateData.to.length;
+        }
+        if (data.projects !== undefined) updateData.projects = Array.isArray(data.projects) ? data.projects.map(p => p.toString()).filter(Boolean) : [];
+        if (data.status !== undefined) updateData.status = data.status;
+
+        const result = await db.collection('interactions').updateOne(
+            { _id: new ObjectId(id) },
+            { $set: updateData }
+        );
+
+        if (result.matchedCount === 0) throw new Error('Interaction non trouvée');
+        return await this.getById(db, id);
+    },
+
+    async delete(db, id) {
+        if (!validateObjectId(id)) throw new Error('ID interaction invalide');
+        const result = await db.collection('interactions').deleteOne({ _id: new ObjectId(id) });
+        if (result.deletedCount === 0) throw new Error('Interaction non trouvée');
+        return { message: 'Interaction supprimée avec succès', id };
+    }
+};
+
+// 🔹 CRUD POUR ANALYSES DE SYNERGIE
+const synergyAnalysesCRUD = {
+    async getAll(db, { skip = 0, limit = 0 } = {}) {
+        const analyses = await db.collection('synergy_analyses')
+            .find({}, collectionConfig.synergy_analyses)
+            .sort({ createdAt: -1 })
+            .skip(skip)
+            .limit(limit)
+            .toArray();
+        return analyses.map(analysis => ({
+            ...analysis,
+            _id: analysis._id.toString()
+        }));
+    },
+
+    async getById(db, id) {
+        if (!validateObjectId(id)) throw new Error('ID analyse synergie invalide');
+        const analysis = await db.collection('synergy_analyses').findOne({ _id: new ObjectId(id) }, collectionConfig.synergy_analyses);
+        if (!analysis) throw new Error('Analyse synergie non trouvée');
+        return { ...analysis, _id: analysis._id.toString() };
+    },
+
+    async create(db, data) {
+        const analysisData = {
+            type: data.type || 'professional_synergy_analysis',
+            title: data.title || `Analyse Synergies ${new Date().toLocaleDateString('fr-FR')}`,
+            description: data.description || 'Analyse de synergies professionnelles',
+            analysisData: data.analysisData || {},
+            statistics: data.statistics || {},
+            timestamp: new Date(),
+            status: 'completed',
+            aiEnhanced: data.statistics?.aiEnhanced || false,
+            membersInvolved: data.statistics?.totalMembers || 0,
+            synergyScores: {
+                average: data.analysisData?.synergies?.reduce((acc, s) => acc + (s.score || 0), 0) / (data.analysisData?.synergies?.length || 1) || 0,
+                highPotential: data.statistics?.highPotentialSynergies || 0,
+                total: data.statistics?.totalSynergies || 0
+            },
+            recommendations: data.analysisData?.projectOpportunities || [],
+            createdAt: new Date(),
+            updatedAt: new Date(),
+            metadata: {
+                version: data.metadata?.version || '2.0.0',
+                aiModel: data.statistics?.aiModel || 'algorithmic',
+                processingTime: data.statistics?.processingTime || 0,
+                source: data.metadata?.source || 'appwrite_function',
+                deepAnalysis: data.metadata?.deepAnalysis || false,
+                membersAnalyzed: data.metadata?.membersAnalyzed || 0
+            }
+        };
+
+        const result = await db.collection('synergy_analyses').insertOne(analysisData);
+        return { ...analysisData, _id: result.insertedId.toString() };
+    },
+
+    async update(db, id, data) {
+        if (!validateObjectId(id)) throw new Error('ID analyse synergie invalide');
+        
+        const updateData = { updatedAt: new Date() };
+        
+        if (data.title !== undefined) updateData.title = data.title;
+        if (data.description !== undefined) updateData.description = data.description;
+        if (data.analysisData !== undefined) updateData.analysisData = data.analysisData;
+        if (data.statistics !== undefined) updateData.statistics = data.statistics;
+        if (data.status !== undefined) updateData.status = data.status;
+        if (data.aiEnhanced !== undefined) updateData.aiEnhanced = data.aiEnhanced;
+        if (data.metadata !== undefined) updateData.metadata = data.metadata;
+
+        const result = await db.collection('synergy_analyses').updateOne(
+            { _id: new ObjectId(id) },
+            { $set: updateData }
+        );
+
+        if (result.matchedCount === 0) throw new Error('Analyse synergie non trouvée');
+        return await this.getById(db, id);
+    },
+
+    async delete(db, id) {
+        if (!validateObjectId(id)) throw new Error('ID analyse synergie invalide');
+        const result = await db.collection('synergy_analyses').deleteOne({ _id: new ObjectId(id) });
+        if (result.deletedCount === 0) throw new Error('Analyse synergie non trouvée');
+        return { message: 'Analyse synergie supprimée avec succès', id };
+    }
+};
+
+// 🔹 ROUTEUR PRINCIPAL
+const routeHandlers = {
+    // GET - Récupérer toutes les données
+    async GET_ALL_DATA(db, req) {
+        const { skip, limit, hasPagination } = getPaginationParams(req);
+        
+        const [
+            members, projects, groups, analyses, skills, 
+            specialties, interactions, synergyAnalyses
+        ] = await Promise.all([
+            membersCRUD.getAll(db, { skip: hasPagination ? skip : 0, limit: hasPagination ? limit : 0 }),
+            projectsCRUD.getAll(db, { skip: hasPagination ? skip : 0, limit: hasPagination ? limit : 0 }),
+            groupsCRUD.getAll(db, { skip: hasPagination ? skip : 0, limit: hasPagination ? limit : 0 }),
+            analysesCRUD.getAll(db, { skip: hasPagination ? skip : 0, limit: hasPagination ? limit : 0 }),
+            skillsCRUD.getAll(db),
+            specialtiesCRUD.getAll(db),
+            interactionsCRUD.getAll(db, { skip: hasPagination ? skip : 0, limit: hasPagination ? limit : 0 }),
+            synergyAnalysesCRUD.getAll(db, { skip: hasPagination ? skip : 0, limit: hasPagination ? limit : 0 })
+        ]);
+
+        return {
+            success: true,
+            data: {
+                members,
+                projects,
+                groups,
+                analyses,
+                skills,
+                specialties,
+                interactions,
+                synergyAnalyses
+            },
+            metadata: {
+                totals: {
+                    members: members.length,
+                    projects: projects.length,
+                    groups: groups.length,
+                    analyses: analyses.length,
+                    skills: skills.length,
+                    specialties: specialties.length,
+                    interactions: interactions.length,
+                    synergyAnalyses: synergyAnalyses.length
+                },
+                pagination: hasPagination ? { limit, skip, page: Math.floor(skip / limit) + 1 } : null,
+                timestamp: new Date().toISOString()
+            }
+        };
+    },
+
+    // CRUD par collection et par ID
+    async handleCRUD(db, collection, method, id, data) {
+        const crudMap = {
+            'members': membersCRUD,
+            'projects': projectsCRUD,
+            'groups': groupsCRUD,
+            'analyses': analysesCRUD,
+            'skills': skillsCRUD,
+            'specialties': specialtiesCRUD,
+            'interactions': interactionsCRUD,
+            'synergy_analyses': synergyAnalysesCRUD
+        };
+
+        const crud = crudMap[collection];
+        if (!crud) throw new Error(`Collection ${collection} non supportée`);
+
+        switch (method) {
+            case 'GET':
+                return id ? await crud.getById(db, id) : await crud.getAll(db);
+            case 'POST':
+                return await crud.create(db, data);
+            case 'PUT':
+                if (!id) throw new Error('ID requis pour la mise à jour');
+                return await crud.update(db, id, data);
+            case 'DELETE':
+                if (!id) throw new Error('ID requis pour la suppression');
+                return await crud.delete(db, id);
+            default:
+                throw new Error(`Méthode ${method} non supportée`);
+        }
+    }
+};
+
+// 🔹 FONCTION PRINCIPALE
+export default async function handler({ req, res, log, error }) {
+    log(`🚀 Fonction Appwrite - Méthode: ${req.method}, Path: ${req.path}`);
 
     const MONGO_URI = process.env.MONGODB_URI;
     const DB_NAME = process.env.MONGODB_DB_NAME || "matrice";
 
     if (!MONGO_URI) {
-        const msg = "❌ Variable MONGODB_URI manquante !";
-        error(msg);
         return res.json({
             success: false,
-            message: msg,
+            message: "❌ Variable MONGODB_URI manquante !",
             timestamp: new Date().toISOString()
         });
     }
@@ -377,372 +851,49 @@ export default async function handler({ req, res, log, error }) {
 
         const db = client.db(DB_NAME);
 
-        // 🔹 GESTION DES REQUÊTES DE SAUVEGARDE
-        if (req.method === 'POST' && req.path === '/api/v1/synergy-analysis') {
-            log("💾 Requête de sauvegarde d'analyse reçue");
-            
-            try {
-                let analysisData;
-                if (typeof req.body === 'string') {
-                    analysisData = JSON.parse(req.body);
-                } else if (req.body && typeof req.body === 'object') {
-                    analysisData = req.body;
-                } else {
-                    throw new Error("Format de données invalide");
-                }
-
-                log("📊 Données analyse reçues:", {
-                    type: analysisData.type,
-                    title: analysisData.title,
-                    synergies: analysisData.analysisData?.synergies?.length,
-                    aiEnhanced: analysisData.statistics?.aiEnhanced
-                });
-
-                const result = await saveSynergyAnalysis(db, analysisData);
-                
-                return res.json({
-                    success: true,
-                    message: "Analyse sauvegardée avec succès dans MongoDB Atlas",
-                    ...result,
-                    timestamp: new Date().toISOString()
-                });
-            } catch (saveError) {
-                error("❌ Erreur sauvegarde analyse:", saveError);
-                return res.json({
-                    success: false,
-                    message: "Erreur lors de la sauvegarde de l'analyse",
-                    error: saveError.message,
-                    timestamp: new Date().toISOString()
-                });
-            }
-        }
-
-        // 🔹 GESTION DE LA PAGINATION
-        const { limit, skip, hasPagination } = getPaginationParams(req);
+        // 🔹 EXTRACTION DES PARAMÈTRES DE ROUTE
+        const path = req.path || '';
+        const method = req.method || 'GET';
+        const body = parseRequestBody(req.body);
         
-        // 🔹 RÉCUPÉRATION DE TOUTES LES COLLECTIONS AVEC PROJECTION
-        log("📥 Récupération de toutes les collections avec projection...");
+        log(`📡 Route: ${method} ${path}`, body);
 
-        const collectionPromises = {
-            members: db.collection('members')
-                .find({}, collectionConfig.members)
-                .skip(hasPagination ? skip : 0)
-                .limit(hasPagination ? limit : 0)
-                .toArray(),
-            
-            projects: db.collection('projects')
-                .find({}, collectionConfig.projects)
-                .sort({ createdAt: -1 })
-                .skip(hasPagination ? skip : 0)
-                .limit(hasPagination ? limit : 0)
-                .toArray(),
-            
-            groups: db.collection('groups')
-                .find({}, collectionConfig.groups)
-                .skip(hasPagination ? skip : 0)
-                .limit(hasPagination ? limit : 0)
-                .toArray(),
-            
-            analyses: db.collection('analyses')
-                .find({}, collectionConfig.analyses)
-                .sort({ createdAt: -1 })
-                .skip(hasPagination ? skip : 0)
-                .limit(hasPagination ? limit : 0)
-                .toArray(),
-            
-            skills: db.collection('skills')
-                .find({}, collectionConfig.skills)
-                .toArray(),
-            
-            specialties: db.collection('specialties')
-                .find({}, collectionConfig.specialties)
-                .toArray(),
-            
-            interactions: db.collection('interactions')
-                .find({}, collectionConfig.interactions)
-                .sort({ createdAt: -1 })
-                .skip(hasPagination ? skip : 0)
-                .limit(hasPagination ? limit : 0)
-                .toArray(),
-            
-            synergy_analyses: db.collection('synergy_analyses')
-                .find({}, collectionConfig.synergy_analyses)
-                .sort({ createdAt: -1 })
-                .limit(50) // Limiter aux 50 dernières analyses
-                .toArray()
-        };
+        // Pattern: /api/v1/:collection/:id?
+        const pathMatch = path.match(/\/api\/v1\/([a-zA-Z_]+)\/?([a-f0-9]{24})?/);
+        const collection = pathMatch ? pathMatch[1] : null;
+        const id = pathMatch ? pathMatch[2] : null;
 
-        // 🔹 EXÉCUTION PARALLÈLE AVEC GESTION D'ERREUR
-        const results = await Promise.allSettled(Object.values(collectionPromises));
+        // 🔹 ROUTAGE DES REQUÊTES
+        let result;
 
-        // 🔹 EXTRACTION DES DONNÉES AVEC GESTION D'ERREUR
-        const members = handleCollectionError(results[0], 'members', log, error, []);
-        const projects = handleCollectionError(results[1], 'projects', log, error, []);
-        const groups = handleCollectionError(results[2], 'groups', log, error, []);
-        const analyses = handleCollectionError(results[3], 'analyses', log, error, []);
-        const skills = handleCollectionError(results[4], 'skills', log, error, []);
-        const specialties = handleCollectionError(results[5], 'specialties', log, error, []);
-        const interactions = handleCollectionError(results[6], 'interactions', log, error, []);
-        const synergyAnalyses = handleCollectionError(results[7], 'synergy_analyses', log, error, []);
-
-        // 🔹 VALIDATION DES DONNÉES CRITIQUES
-        const validation = validateCriticalData(members, projects);
-        if (validation.errors.length > 0) {
-            error(`❌ Erreurs de validation: ${validation.errors.join(', ')}`);
+        if (method === 'GET' && path === '/api/v1/all-data') {
+            // Route spéciale pour toutes les données
+            result = await routeHandlers.GET_ALL_DATA(db, req);
+        } else if (collection) {
+            // CRUD par collection
+            result = await routeHandlers.handleCRUD(db, collection, method, id, body);
+        } else {
+            throw new Error('Route non reconnue. Utilisez /api/v1/:collection ou /api/v1/all-data');
         }
-        if (validation.warnings.length > 0) {
-            log(`⚠️ Avertissements: ${validation.warnings.join(', ')}`);
-        }
-
-        log(`✅ Données brutes récupérées: ${members.length} membres, ${projects.length} projets, ${synergyAnalyses.length} analyses sauvegardées`);
-
-        // 🔹 FORMATAGE OPTIMISÉ DES MEMBRES
-        const formattedMembers = formatCollection(members, (member) => {
-            const memberSpecialties = cleanArray(member.specialties, 'specialties');
-            const memberSkills = cleanArray(member.skills, 'skills');
-
-            return {
-                _id: member._id?.toString() || `temp-${Date.now()}-${Math.random()}`,
-                name: member.name || 'Nom non renseigné',
-                title: member.title || '',
-                email: member.email || '',
-                phone: member.phone || '',
-                specialties: memberSpecialties,
-                skills: memberSkills,
-                location: member.location || '',
-                organization: member.organization || '',
-                entreprise: member.entreprise || '',
-                experienceYears: member.experienceYears || 0,
-                projects: member.projects || '',
-                availability: member.availability || '',
-                statutMembre: member.statutMembre || 'Actif',
-                photo: processPhotoUrl(member.photo),
-                cvLink: member.cvLink || '',
-                linkedin: member.linkedin || '',
-                isActive: member.isActive !== undefined ? member.isActive : true,
-                createdAt: member.createdAt || new Date(),
-                updatedAt: member.updatedAt || new Date()
-            };
-        }, 'membres');
-
-        // 🔹 FORMATAGE DES PROJETS
-        const formattedProjects = formatCollection(projects, (project) => {
-            let projectMembers = [];
-            if (Array.isArray(project.members)) {
-                projectMembers = project.members.map(m => m?.toString()).filter(Boolean);
-            } else if (project.members) {
-                projectMembers = [project.members.toString()];
-            }
-
-            return {
-                _id: project._id?.toString(),
-                title: project.title || 'Sans titre',
-                description: project.description || '',
-                members: projectMembers,
-                status: project.status || 'idea',
-                organization: project.organization || '',
-                tags: Array.isArray(project.tags) ? project.tags : [],
-                createdAt: project.createdAt || new Date(),
-                importedFromMember: project.importedFromMember || false,
-                memberSource: project.memberSource || ''
-            };
-        }, 'projets');
-
-        // 🔹 FORMATAGE DES GROUPES
-        const formattedGroups = formatCollection(groups, (group) => ({
-            _id: group._id?.toString(),
-            name: group.name || '',
-            description: group.description || '',
-            type: group.type || 'technique',
-            privacy: group.privacy || 'public',
-            tags: Array.isArray(group.tags) ? group.tags : [],
-            members: group.members ? group.members.map(m => m?.toString()).filter(Boolean) : [],
-            leader: group.leader?.toString() || null,
-            memberCount: group.members ? group.members.length : 0,
-            autoCreated: group.autoCreated || false,
-            creationType: group.creationType || 'manual'
-        }), 'groupes');
-
-        // 🔹 FORMATAGE DES ANALYSES DE SYNERGIE
-        const formattedSynergyAnalyses = formatCollection(synergyAnalyses, (analysis) => ({
-            _id: analysis._id?.toString(),
-            type: analysis.type || 'professional_synergy_analysis',
-            title: analysis.title || 'Analyse de synergies',
-            description: analysis.description || '',
-            analysisData: analysis.analysisData || {},
-            statistics: analysis.statistics || {},
-            timestamp: analysis.timestamp || analysis.createdAt,
-            status: analysis.status || 'completed',
-            aiEnhanced: analysis.aiEnhanced || false,
-            membersInvolved: analysis.membersInvolved || 0,
-            synergyScores: analysis.synergyScores || {},
-            recommendations: analysis.recommendations || [],
-            createdAt: analysis.createdAt || new Date(),
-            updatedAt: analysis.updatedAt || new Date(),
-            metadata: analysis.metadata || {}
-        }), 'analyses_de_synergie');
-
-        // 🔹 FORMATAGE DES AUTRES COLLECTIONS
-        const formattedAnalyses = formatCollection(analyses, (analysis) => ({
-            _id: analysis._id?.toString(),
-            type: analysis.type || 'interaction_analysis',
-            title: analysis.title || '',
-            description: analysis.description || '',
-            insights: analysis.insights || {},
-            suggestions: Array.isArray(analysis.suggestions) ? analysis.suggestions : [],
-            statistics: analysis.statistics || {},
-            status: analysis.status || 'completed',
-            analysisTimestamp: analysis.analysisTimestamp || analysis.createdAt
-        }), 'analyses');
-
-        const formattedSkills = formatCollection(skills, (skill) => ({
-            _id: skill._id?.toString(),
-            name: skill.name || '',
-            category: skill.category || 'technique',
-            description: skill.description || '',
-            memberCount: skill.memberCount || 0
-        }), 'compétences');
-
-        const formattedSpecialties = formatCollection(specialties, (specialty) => ({
-            _id: specialty._id?.toString(),
-            name: specialty.name || '',
-            category: specialty.category || 'technique',
-            description: specialty.description || '',
-            memberCount: specialty.memberCount || 0
-        }), 'spécialités');
-
-        const formattedInteractions = formatCollection(interactions, (interaction) => ({
-            _id: interaction._id?.toString(),
-            type: interaction.type || 'message',
-            title: interaction.title || '',
-            description: interaction.description || '',
-            from: interaction.from?.toString() || '',
-            to: interaction.to ? interaction.to.map(t => t?.toString()).filter(Boolean) : [],
-            projects: interaction.projects ? interaction.projects.map(p => p?.toString()).filter(Boolean) : [],
-            status: interaction.status || 'pending',
-            participantCount: 1 + (interaction.to ? interaction.to.length : 0)
-        }), 'interactions');
-
-        // 🔹 CALCUL DES STATISTIQUES AVANCÉES
-        const enhancedStats = calculateEnhancedStats(
-            formattedMembers, 
-            formattedProjects, 
-            formattedGroups,
-            formattedSkills,
-            formattedSpecialties,
-            formattedSynergyAnalyses
-        );
 
         await client.close();
-        log("✅ Connexion MongoDB fermée");
 
-        // 🔹 PRÉPARATION DE LA RÉPONSE COMPLÈTE
-        const responseData = {
+        return res.json({
             success: true,
-            timestamp: new Date().toISOString(),
-
-            // Format principal pour compatibilité
-            projects: formattedProjects,
-            members: formattedMembers,
-
-            // Structure complète organisée
-            data: {
-                members: formattedMembers,
-                projects: formattedProjects,
-                groups: formattedGroups,
-                analyses: formattedAnalyses,
-                skills: formattedSkills,
-                specialties: formattedSpecialties,
-                interactions: formattedInteractions,
-                synergyAnalyses: formattedSynergyAnalyses // Nouvelle collection
-            },
-
-            // Métadonnées enrichies
-            metadata: {
-                totals: {
-                    members: formattedMembers.length,
-                    projects: formattedProjects.length,
-                    groups: formattedGroups.length,
-                    analyses: formattedAnalyses.length,
-                    skills: formattedSkills.length,
-                    specialties: formattedSpecialties.length,
-                    interactions: formattedInteractions.length,
-                    synergyAnalyses: formattedSynergyAnalyses.length
-                },
-                statistics: enhancedStats,
-                pagination: hasPagination ? { limit, skip } : null,
-                validation: {
-                    errors: validation.errors,
-                    warnings: validation.warnings
-                },
-                performance: {
-                    cached: false,
-                    fromCache: false,
-                    processingTime: Date.now() - (cacheTimestamp || Date.now())
-                },
-                database: DB_NAME,
-                version: '3.1.0',
-                features: {
-                    synergyAnalysis: true,
-                    aiIntegration: true,
-                    realTimeUpdates: true,
-                    advancedStatistics: true
-                }
-            },
-            
-            message: `Données chargées avec succès: ${formattedMembers.length} membres, ${formattedProjects.length} projets, ${formattedSynergyAnalyses.length} analyses sauvegardées`
-        };
-
-        // 🔹 MISE EN CACHE
-        if (useCache) {
-            cache = responseData;
-            cacheTimestamp = Date.now();
-            log("✅ Données mises en cache pour 5 minutes");
-        }
-
-        log(`✅ Réponse préparée: ${formattedMembers.length} membres, ${formattedProjects.length} projets, ${formattedSynergyAnalyses.length} analyses`);
-        return res.json(responseData);
+            data: result,
+            timestamp: new Date().toISOString()
+        });
 
     } catch (err) {
-        error("❌ Erreur critique: " + err.message);
+        error("❌ Erreur:", err.message);
         if (client) {
             await client.close().catch(e => error("Erreur fermeture client: " + e.message));
         }
         
         return res.json({
             success: false,
-            message: "Erreur lors du chargement des données",
-            error: process.env.NODE_ENV === 'development' ? err.message : 'Contactez l\'administrateur',
-            timestamp: new Date().toISOString(),
-            fallbackData: {
-                members: [],
-                projects: [],
-                groups: [],
-                synergyAnalyses: []
-            }
+            message: err.message,
+            timestamp: new Date().toISOString()
         });
     }
 }
-
-// 🔹 FONCTION DE SAUVEGARDE DIRECTE POUR TESTS
-export const saveSynergyAnalysisDirect = async (analysisData) => {
-    const MONGO_URI = process.env.MONGODB_URI;
-    const DB_NAME = process.env.MONGODB_DB_NAME || "matrice";
-    
-    if (!MONGO_URI) {
-        throw new Error("MONGODB_URI manquante");
-    }
-
-    let client;
-    try {
-        client = new MongoClient(MONGO_URI);
-        await client.connect();
-        const db = client.db(DB_NAME);
-        
-        return await saveSynergyAnalysis(db, analysisData);
-    } finally {
-        if (client) {
-            await client.close();
-        }
-    }
-};
