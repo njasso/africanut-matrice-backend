@@ -1,9 +1,104 @@
-// functions/get-matrice/src/index.js - VERSION OPTIMISÉE (READ ALL)
+// functions/get-matrice/src/index.js - VERSION COMPLÈTE OPTIMISÉE
 
 import { MongoClient } from "mongodb";
 
+// 🔹 FONCTION UNIVERSELLE DE NETTOYAGE DES TABLEAUX
+const cleanArray = (data, fieldName = '') => {
+    if (!data) {
+        console.log(`🔸 ${fieldName}: données nulles, retour tableau vide`);
+        return [];
+    }
+
+    // Si c'est déjà un tableau
+    if (Array.isArray(data)) {
+        const cleaned = data
+            .map(item => {
+                if (typeof item === 'string') return item.trim();
+                if (item && typeof item === 'object' && item.name) return item.name.trim();
+                return String(item).trim();
+            })
+            .filter(item => item && item !== '' && item !== 'null' && item !== 'undefined');
+        
+        console.log(`🔸 ${fieldName}: tableau de ${data.length} → ${cleaned.length} éléments après nettoyage`);
+        return cleaned;
+    }
+
+    // Si c'est une chaîne avec séparateurs
+    if (typeof data === 'string') {
+        const cleaned = data
+            .split(/[,;|]/)
+            .map(item => item.trim())
+            .filter(item => item && item !== '' && item !== 'null' && item !== 'undefined');
+        
+        console.log(`🔸 ${fieldName}: chaîne "${data.substring(0, 50)}..." → ${cleaned.length} éléments`);
+        return cleaned;
+    }
+
+    // Cas par défaut
+    return [String(data).trim()].filter(item => item && item !== '' && item !== 'null' && item !== 'undefined');
+};
+
+// 🔹 FONCTION DE FORMATAGE GÉNÉRIQUE DES COLLECTIONS
+const formatCollection = (collection, mapper, collectionName = 'items') => {
+    if (!Array.isArray(collection)) {
+        console.log(`⚠️ ${collectionName}: collection non-tableau, conversion`);
+        return [];
+    }
+
+    const formatted = collection
+        .map((item, index) => {
+            try {
+                return mapper(item, index);
+            } catch (error) {
+                console.error(`❌ Erreur formatage ${collectionName}[${index}]:`, error.message);
+                return null;
+            }
+        })
+        .filter(item => item !== null);
+
+    console.log(`✅ ${collectionName}: ${collection.length} → ${formatted.length} éléments formatés`);
+    return formatted;
+};
+
+// 🔹 FONCTION DE CALCUL DES STATISTIQUES
+const calculateStats = (members) => {
+    const stats = {
+        membersWithSpecialties: members.filter(m => m.specialties && m.specialties.length > 0).length,
+        membersWithSkills: members.filter(m => m.skills && m.skills.length > 0).length,
+        membersWithBoth: members.filter(m => 
+            m.specialties && m.specialties.length > 0 && 
+            m.skills && m.skills.length > 0
+        ).length,
+        totalSpecialties: [...new Set(members.flatMap(m => m.specialties || []))].length,
+        totalSkills: [...new Set(members.flatMap(m => m.skills || []))].length,
+        activeMembers: members.filter(m => m.isActive !== false).length,
+        membersWithProjects: members.filter(m => m.projects && m.projects.trim() !== '').length
+    };
+
+    console.log(`📊 Statistiques calculées: ${stats.activeMembers}/${members.length} membres actifs`);
+    return stats;
+};
+
+// 🔹 FONCTION DE VALIDATION ET CORRECTION URL PHOTO
+const processPhotoUrl = (photoUrl) => {
+    if (!photoUrl || typeof photoUrl !== 'string') return '';
+
+    // Correction des chemins relatifs
+    if (photoUrl.startsWith('../assets/photos/')) {
+        return photoUrl.replace('../assets/photos/', '/assets/photos/');
+    }
+
+    // Ajout du slash initial si manquant pour les chemins locaux
+    if (photoUrl.startsWith('assets/photos/') && !photoUrl.startsWith('/')) {
+        return '/' + photoUrl;
+    }
+
+    return photoUrl;
+};
+
+// 🔹 FONCTION PRINCIPALE
 export default async function handler({ req, res, log, error }) {
-    log("🚀 Fonction Appwrite lancée : get-matrice - VERSION OPTIMISÉE");
+    log("🚀 Fonction Appwrite lancée : get-matrice - VERSION COMPLÈTE");
 
     const MONGO_URI = process.env.MONGODB_URI;
     const DB_NAME = process.env.MONGODB_DB_NAME || "matrice";
@@ -39,7 +134,7 @@ export default async function handler({ req, res, log, error }) {
             interactions: db.collection('interactions').find({}).sort({ createdAt: -1 }).toArray()
         };
 
-        // 🔹 Exécution avec gestion d'erreur par collection (Promise.allSettled)
+        // 🔹 Exécution avec gestion d'erreur par collection
         const results = await Promise.allSettled(Object.values(collectionPromises));
 
         const [
@@ -64,52 +159,25 @@ export default async function handler({ req, res, log, error }) {
         // 🔹 Log des erreurs individuelles
         const errors = results.filter(result => result.status === 'rejected');
         if (errors.length > 0) {
+            log(`⚠️ ${errors.length} collection(s) avec erreurs:`);
             errors.forEach((err, index) => {
-                // Pour savoir quelle collection a échoué, il faut matcher l'index
-                const failedKey = Object.keys(collectionPromises)[results.findIndex(r => r === err)];
-                error(`❌ Erreur collection ${failedKey || index}: ${err.reason.message}`);
+                const collectionNames = Object.keys(collectionPromises);
+                const failedIndex = results.findIndex(r => r.status === 'rejected');
+                const failedKey = collectionNames[failedIndex];
+                error(`❌ Erreur collection ${failedKey}: ${err.reason?.message || 'Erreur inconnue'}`);
             });
         }
 
-        // 🔹 FONCTION UNIVERSELLE DE NETTOYAGE DES TABLEAUX (Inclus dans votre code)
-        const cleanArray = (data, fieldName = '') => {
-            // ... (logique de nettoyage)
-            if (!data) return [];
+        log(`✅ Données brutes récupérées: ${members.length} membres, ${projects.length} projets`);
 
-            if (Array.isArray(data)) {
-                return data
-                    .map(item => {
-                        if (typeof item === 'string') return item.trim();
-                        if (item && typeof item === 'object' && item.name) return item.name.trim();
-                        return String(item).trim();
-                    })
-                    .filter(item => item && item !== '' && item !== 'null' && item !== 'undefined');
-            }
-
-            if (typeof data === 'string') {
-                return data
-                    .split(/[,;|]/)
-                    .map(item => item.trim())
-                    .filter(item => item && item !== '' && item !== 'null' && item !== 'undefined');
-            }
-
-            return [String(data).trim()].filter(item => item && item !== '' && item !== 'null' && item !== 'undefined');
-        };
-
-        // 🔹 CORRECTION OPTIMISÉE DES MEMBRES et STATS (Inclus dans votre code)
-        const formattedMembers = members.map(member => {
-            // ... (logique de formatage des membres)
+        // 🔹 CORRECTION OPTIMISÉE DES MEMBRES
+        const formattedMembers = formatCollection(members, (member) => {
             const memberSpecialties = cleanArray(member.specialties, 'specialties');
             const memberSkills = cleanArray(member.skills, 'skills');
 
-            let photoUrl = member.photo || '';
-            if (photoUrl && photoUrl.startsWith('../assets/photos/')) {
-                photoUrl = photoUrl.replace('../assets/photos/', '/assets/photos/');
-            }
-
             return {
-                _id: member._id?.toString(),
-                name: member.name || '',
+                _id: member._id?.toString() || `temp-${Date.now()}-${Math.random()}`,
+                name: member.name || 'Nom non renseigné',
                 title: member.title || '',
                 email: member.email || '',
                 phone: member.phone || '',
@@ -122,53 +190,57 @@ export default async function handler({ req, res, log, error }) {
                 projects: member.projects || '',
                 availability: member.availability || '',
                 statutMembre: member.statutMembre || 'Actif',
-                photo: photoUrl,
+                photo: processPhotoUrl(member.photo),
                 cvLink: member.cvLink || '',
                 linkedin: member.linkedin || '',
                 isActive: member.isActive !== undefined ? member.isActive : true,
-                createdAt: member.createdAt,
-                updatedAt: member.updatedAt
+                createdAt: member.createdAt || new Date(),
+                updatedAt: member.updatedAt || new Date()
             };
-        });
+        }, 'membres');
         
-        const stats = {
-            membersWithSpecialties: formattedMembers.filter(m => m.specialties.length > 0).length,
-            membersWithSkills: formattedMembers.filter(m => m.skills.length > 0).length,
-            membersWithBoth: formattedMembers.filter(m => m.specialties.length > 0 && m.skills.length > 0).length,
-            totalSpecialties: [...new Set(formattedMembers.flatMap(m => m.specialties))].length,
-            totalSkills: [...new Set(formattedMembers.flatMap(m => m.skills))].length
-        };
+        // 🔹 CALCUL DES STATISTIQUES
+        const stats = calculateStats(formattedMembers);
         
-        // 🔹 Formatage des autres collections (Inclus dans votre code)
-        const formatCollection = (collection, mapper) =>
-            collection.map(mapper).filter(item => item !== null);
+        // 🔹 FORMATAGE DES PROJETS
+        const formattedProjects = formatCollection(projects, (project) => {
+            // S'assurer que members est toujours un tableau
+            let projectMembers = [];
+            if (Array.isArray(project.members)) {
+                projectMembers = project.members.map(m => m?.toString()).filter(Boolean);
+            } else if (project.members) {
+                projectMembers = [project.members.toString()];
+            }
 
-        const formattedProjects = formatCollection(projects, project => ({
-            _id: project._id?.toString(),
-            title: project.title || 'Sans titre',
-            description: project.description || '',
-            members: project.members ? project.members.map(m => m?.toString()) : [],
-            status: project.status || 'idea',
-            organization: project.organization || '',
-            tags: Array.isArray(project.tags) ? project.tags : [],
-            createdAt: project.createdAt || new Date(),
-            importedFromMember: project.importedFromMember || false,
-            memberSource: project.memberSource || ''
-        }));
+            return {
+                _id: project._id?.toString(),
+                title: project.title || 'Sans titre',
+                description: project.description || '',
+                members: projectMembers,
+                status: project.status || 'idea',
+                organization: project.organization || '',
+                tags: Array.isArray(project.tags) ? project.tags : [],
+                createdAt: project.createdAt || new Date(),
+                importedFromMember: project.importedFromMember || false,
+                memberSource: project.memberSource || ''
+            };
+        }, 'projets');
 
-        const formattedGroups = formatCollection(groups, group => ({
+        // 🔹 FORMATAGE DES GROUPES
+        const formattedGroups = formatCollection(groups, (group) => ({
             _id: group._id?.toString(),
             name: group.name || '',
             description: group.description || '',
             type: group.type || 'technique',
             privacy: group.privacy || 'public',
             tags: Array.isArray(group.tags) ? group.tags : [],
-            members: group.members ? group.members.map(m => m?.toString()) : [],
+            members: group.members ? group.members.map(m => m?.toString()).filter(Boolean) : [],
             leader: group.leader?.toString() || null,
             memberCount: group.members ? group.members.length : 0
-        }));
+        }), 'groupes');
 
-        const formattedAnalyses = formatCollection(analyses, analysis => ({
+        // 🔹 FORMATAGE DES ANALYSES
+        const formattedAnalyses = formatCollection(analyses, (analysis) => ({
             _id: analysis._id?.toString(),
             type: analysis.type || 'interaction_analysis',
             title: analysis.title || '',
@@ -178,41 +250,44 @@ export default async function handler({ req, res, log, error }) {
             statistics: analysis.statistics || {},
             status: analysis.status || 'completed',
             analysisTimestamp: analysis.analysisTimestamp || analysis.createdAt
-        }));
+        }), 'analyses');
 
-        const formattedSkills = formatCollection(skills, skill => ({
+        // 🔹 FORMATAGE DES COMPÉTENCES
+        const formattedSkills = formatCollection(skills, (skill) => ({
             _id: skill._id?.toString(),
             name: skill.name || '',
             category: skill.category || 'technique',
             description: skill.description || '',
             memberCount: skill.memberCount || 0
-        }));
+        }), 'compétences');
 
-        const formattedSpecialties = formatCollection(specialties, specialty => ({
+        // 🔹 FORMATAGE DES SPÉCIALITÉS
+        const formattedSpecialties = formatCollection(specialties, (specialty) => ({
             _id: specialty._id?.toString(),
             name: specialty.name || '',
             category: specialty.category || 'technique',
             description: specialty.description || '',
             memberCount: specialty.memberCount || 0
-        }));
+        }), 'spécialités');
 
-        const formattedInteractions = formatCollection(interactions, interaction => ({
+        // 🔹 FORMATAGE DES INTERACTIONS
+        const formattedInteractions = formatCollection(interactions, (interaction) => ({
             _id: interaction._id?.toString(),
             type: interaction.type || 'message',
             title: interaction.title || '',
             description: interaction.description || '',
             from: interaction.from?.toString() || '',
-            to: interaction.to ? interaction.to.map(t => t?.toString()) : [],
-            projects: interaction.projects ? interaction.projects.map(p => p?.toString()) : [],
+            to: interaction.to ? interaction.to.map(t => t?.toString()).filter(Boolean) : [],
+            projects: interaction.projects ? interaction.projects.map(p => p?.toString()).filter(Boolean) : [],
             status: interaction.status || 'pending',
             participantCount: 1 + (interaction.to ? interaction.to.length : 0)
-        }));
-
+        }), 'interactions');
 
         await client.close();
+        log("✅ Connexion MongoDB fermée");
 
-        // 🔹 RÉPONSE FINALE
-        return res.json({
+        // 🔹 PRÉPARATION DE LA RÉPONSE
+        const responseData = {
             success: true,
 
             // Format principal pour compatibilité
@@ -244,19 +319,26 @@ export default async function handler({ req, res, log, error }) {
                 skillsStats: stats,
                 collectionErrors: errors.length,
                 timestamp: new Date().toISOString(),
-                database: DB_NAME
+                database: DB_NAME,
+                version: '2.0.0'
             },
             
-            message: `Données chargées: ${formattedMembers.length} membres`
-        });
+            message: `Données chargées: ${formattedMembers.length} membres, ${formattedProjects.length} projets, ${stats.collectionErrors} erreurs de collection`
+        };
+
+        log(`✅ Réponse préparée: ${formattedMembers.length} membres, ${formattedProjects.length} projets`);
+        return res.json(responseData);
 
     } catch (err) {
         error("❌ Erreur critique: " + err.message);
-        if (client) await client.close();
+        if (client) {
+            await client.close().catch(e => error("Erreur fermeture client: " + e.message));
+        }
         return res.json({
             success: false,
             message: "Erreur lors du chargement des données",
-            error: process.env.NODE_ENV === 'development' ? err.message : 'Contactez l\'administrateur'
+            error: process.env.NODE_ENV === 'development' ? err.message : 'Contactez l\'administrateur',
+            timestamp: new Date().toISOString()
         });
     }
 }
