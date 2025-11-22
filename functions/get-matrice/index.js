@@ -2,6 +2,60 @@
 
 import { MongoClient } from "mongodb";
 
+// 🔹 CACHE POUR PERFORMANCE
+let cache = null;
+let cacheTimestamp = null;
+const CACHE_DURATION = 5 * 60 * 1000; // 5 minutes
+
+// 🔹 CONFIGURATION DES PROJECTIONS POUR OPTIMISATION
+const collectionConfig = {
+    members: { 
+        projection: { 
+            name: 1, title: 1, email: 1, specialties: 1, skills: 1, 
+            organization: 1, isActive: 1, photo: 1, projects: 1,
+            location: 1, entreprise: 1, experienceYears: 1, availability: 1,
+            statutMembre: 1, cvLink: 1, linkedin: 1, createdAt: 1, updatedAt: 1
+        } 
+    },
+    projects: { 
+        projection: { 
+            title: 1, description: 1, members: 1, status: 1, 
+            organization: 1, tags: 1, createdAt: 1, importedFromMember: 1,
+            memberSource: 1
+        } 
+    },
+    groups: { 
+        projection: { 
+            name: 1, description: 1, type: 1, privacy: 1, tags: 1, 
+            members: 1, leader: 1, memberCount: 1, autoCreated: 1,
+            creationType: 1
+        } 
+    },
+    analyses: { 
+        projection: { 
+            type: 1, title: 1, description: 1, insights: 1, 
+            suggestions: 1, statistics: 1, status: 1, analysisTimestamp: 1,
+            createdAt: 1
+        } 
+    },
+    skills: { 
+        projection: { 
+            name: 1, category: 1, description: 1, memberCount: 1 
+        } 
+    },
+    specialties: { 
+        projection: { 
+            name: 1, category: 1, description: 1, memberCount: 1 
+        } 
+    },
+    interactions: { 
+        projection: { 
+            type: 1, title: 1, description: 1, from: 1, to: 1, 
+            projects: 1, status: 1, participantCount: 1, createdAt: 1
+        } 
+    }
+};
+
 // 🔹 FONCTION UNIVERSELLE DE NETTOYAGE DES TABLEAUX
 const cleanArray = (data, fieldName = '') => {
     if (!data) {
@@ -60,26 +114,118 @@ const formatCollection = (collection, mapper, collectionName = 'items') => {
     return formatted;
 };
 
-// 🔹 FONCTION DE CALCUL DES STATISTIQUES
-const calculateStats = (members) => {
-    const stats = {
-        membersWithSpecialties: members.filter(m => m.specialties && m.specialties.length > 0).length,
-        membersWithSkills: members.filter(m => m.skills && m.skills.length > 0).length,
-        membersWithBoth: members.filter(m => 
-            m.specialties && m.specialties.length > 0 && 
-            m.skills && m.skills.length > 0
-        ).length,
-        totalSpecialties: [...new Set(members.flatMap(m => m.specialties || []))].length,
-        totalSkills: [...new Set(members.flatMap(m => m.skills || []))].length,
-        activeMembers: members.filter(m => m.isActive !== false).length,
-        membersWithProjects: members.filter(m => m.projects && m.projects.trim() !== '').length
-    };
+// 🔹 GESTION ROBUSTE DES ERREURS PAR COLLECTION
+const handleCollectionError = (result, collectionName, log, error, fallback = []) => {
+    if (result.status === 'fulfilled') {
+        log(`✅ Collection ${collectionName} chargée: ${result.value.length} éléments`);
+        return result.value;
+    } else {
+        error(`❌ Collection ${collectionName} inaccessible: ${result.reason?.message}`);
+        return fallback;
+    }
+};
 
-    console.log(`📊 Statistiques calculées: ${stats.activeMembers}/${members.length} membres actifs`);
+// 🔹 CALCUL DES STATISTIQUES AVANCÉES
+const getMostCommonItems = (items, limit = 10) => {
+    const frequency = {};
+    items.forEach(item => {
+        frequency[item] = (frequency[item] || 0) + 1;
+    });
+    
+    return Object.entries(frequency)
+        .sort(([,a], [,b]) => b - a)
+        .slice(0, limit)
+        .map(([item, count]) => ({ item, count }));
+};
+
+const calculateEnhancedStats = (members, projects, groups, skills, specialties) => {
+    const allSkills = members.flatMap(m => m.skills || []);
+    const allSpecialties = members.flatMap(m => m.specialties || []);
+    
+    const stats = {
+        members: {
+            total: members.length,
+            active: members.filter(m => m.isActive !== false).length,
+            withSpecialties: members.filter(m => m.specialties && m.specialties.length > 0).length,
+            withSkills: members.filter(m => m.skills && m.skills.length > 0).length,
+            withBoth: members.filter(m => 
+                m.specialties && m.specialties.length > 0 && 
+                m.skills && m.skills.length > 0
+            ).length,
+            withProjects: members.filter(m => m.projects && m.projects.trim() !== '').length,
+            byOrganization: Object.groupBy(members, m => m.organization || 'Non renseigné')
+        },
+        projects: {
+            total: projects.length,
+            byStatus: Object.groupBy(projects, p => p.status || 'idea'),
+            averageMembersPerProject: projects.length > 0 ? 
+                (projects.reduce((sum, p) => sum + (p.members?.length || 0), 0) / projects.length).toFixed(1) : 0
+        },
+        groups: {
+            total: groups.length,
+            byType: Object.groupBy(groups, g => g.type || 'technique'),
+            averageMembersPerGroup: groups.length > 0 ? 
+                (groups.reduce((sum, g) => sum + (g.members?.length || 0), 0) / groups.length).toFixed(1) : 0,
+            autoCreated: groups.filter(g => g.autoCreated).length
+        },
+        skills: {
+            totalUnique: [...new Set(allSkills)].length,
+            mostCommon: getMostCommonItems(allSkills, 10),
+            totalOccurrences: allSkills.length
+        },
+        specialties: {
+            totalUnique: [...new Set(allSpecialties)].length,
+            mostCommon: getMostCommonItems(allSpecialties, 10),
+            totalOccurrences: allSpecialties.length
+        },
+        global: {
+            totalCollections: 7, // membres, projets, groupes, analyses, compétences, spécialités, interactions
+            lastUpdate: new Date().toISOString(),
+            dataQuality: {
+                membersWithCompleteProfile: members.filter(m => 
+                    m.name && m.email && m.specialties?.length > 0 && m.skills?.length > 0
+                ).length,
+                projectsWithMembers: projects.filter(p => p.members?.length > 0).length
+            }
+        }
+    };
+    
     return stats;
 };
 
-// 🔹 FONCTION DE VALIDATION ET CORRECTION URL PHOTO
+// 🔹 VALIDATION DES DONNÉES CRITIQUES
+const validateCriticalData = (members, projects) => {
+    const errors = [];
+    const warnings = [];
+    
+    if (!Array.isArray(members)) {
+        errors.push("Les membres doivent être un tableau");
+    }
+    
+    if (!Array.isArray(projects)) {
+        errors.push("Les projets doivent être un tableau");
+    }
+    
+    // Vérifier la cohérence des références
+    const allMemberIds = new Set(members.map(m => m._id));
+    const projectsWithInvalidMembers = projects.filter(project => 
+        project.members && project.members.some(memberId => !allMemberIds.has(memberId))
+    );
+    
+    if (projectsWithInvalidMembers.length > 0) {
+        warnings.push(`${projectsWithInvalidMembers.length} projets avec des références de membres invalides`);
+    }
+    
+    // Vérifier les données manquantes critiques
+    const membersWithoutName = members.filter(m => !m.name || m.name === 'Nom non renseigné');
+    if (membersWithoutName.length > 0) {
+        warnings.push(`${membersWithoutName.length} membres sans nom valide`);
+    }
+    
+    return { errors, warnings };
+};
+
+// 🔹 CORRECTION ET VALIDATION URL PHOTO
 const processPhotoUrl = (photoUrl) => {
     if (!photoUrl || typeof photoUrl !== 'string') return '';
 
@@ -93,12 +239,43 @@ const processPhotoUrl = (photoUrl) => {
         return '/' + photoUrl;
     }
 
-    return photoUrl;
+    // Validation URL
+    try {
+        new URL(photoUrl);
+        return photoUrl; // URL absolue valide
+    } catch {
+        // URL relative, la retourner telle quelle
+        return photoUrl;
+    }
 };
 
-// 🔹 FONCTION PRINCIPALE
+// 🔹 GESTION DE LA PAGINATION
+const getPaginationParams = (req) => {
+    const query = req.query || {};
+    const page = Math.max(1, parseInt(query.page) || 1);
+    const limit = Math.min(100, Math.max(1, parseInt(query.limit) || 0)); // 0 = pas de limite
+    const skip = (page - 1) * limit;
+    
+    return { page, limit, skip, hasPagination: limit > 0 };
+};
+
+// 🔹 FONCTION PRINCIPALE OPTIMISÉE
 export default async function handler({ req, res, log, error }) {
-    log("🚀 Fonction Appwrite lancée : get-matrice - VERSION COMPLÈTE");
+    log("🚀 Fonction Appwrite lancée : get-matrice - VERSION OPTIMISÉE");
+
+    // 🔹 VÉRIFICATION DU CACHE
+    const useCache = req.query?.cache !== 'false';
+    if (useCache && cache && cacheTimestamp && (Date.now() - cacheTimestamp) < CACHE_DURATION) {
+        log("✅ Retour des données en cache");
+        return res.json({
+            ...cache,
+            metadata: {
+                ...cache.metadata,
+                cached: true,
+                cacheAge: Math.round((Date.now() - cacheTimestamp) / 1000)
+            }
+        });
+    }
 
     const MONGO_URI = process.env.MONGODB_URI;
     const DB_NAME = process.env.MONGODB_DB_NAME || "matrice";
@@ -108,7 +285,8 @@ export default async function handler({ req, res, log, error }) {
         error(msg);
         return res.json({
             success: false,
-            message: msg
+            message: msg,
+            timestamp: new Date().toISOString()
         });
     }
 
@@ -121,56 +299,79 @@ export default async function handler({ req, res, log, error }) {
 
         const db = client.db(DB_NAME);
 
-        // 🔹 Récupérer TOUTES les collections avec gestion d'erreur individuelle
-        log("📥 Récupération de toutes les collections...");
+        // 🔹 GESTION DE LA PAGINATION
+        const { limit, skip, hasPagination } = getPaginationParams(req);
+        
+        // 🔹 RÉCUPÉRATION DE TOUTES LES COLLECTIONS AVEC PROJECTION
+        log("📥 Récupération de toutes les collections avec projection...");
 
         const collectionPromises = {
-            members: db.collection('members').find({}).toArray(),
-            projects: db.collection('projects').find({}).sort({ createdAt: -1 }).toArray(),
-            groups: db.collection('groups').find({}).toArray(),
-            analyses: db.collection('analyses').find({}).sort({ createdAt: -1 }).toArray(),
-            skills: db.collection('skills').find({}).toArray(),
-            specialties: db.collection('specialties').find({}).toArray(),
-            interactions: db.collection('interactions').find({}).sort({ createdAt: -1 }).toArray()
+            members: db.collection('members')
+                .find({}, collectionConfig.members)
+                .skip(hasPagination ? skip : 0)
+                .limit(hasPagination ? limit : 0)
+                .toArray(),
+            
+            projects: db.collection('projects')
+                .find({}, collectionConfig.projects)
+                .sort({ createdAt: -1 })
+                .skip(hasPagination ? skip : 0)
+                .limit(hasPagination ? limit : 0)
+                .toArray(),
+            
+            groups: db.collection('groups')
+                .find({}, collectionConfig.groups)
+                .skip(hasPagination ? skip : 0)
+                .limit(hasPagination ? limit : 0)
+                .toArray(),
+            
+            analyses: db.collection('analyses')
+                .find({}, collectionConfig.analyses)
+                .sort({ createdAt: -1 })
+                .skip(hasPagination ? skip : 0)
+                .limit(hasPagination ? limit : 0)
+                .toArray(),
+            
+            skills: db.collection('skills')
+                .find({}, collectionConfig.skills)
+                .toArray(),
+            
+            specialties: db.collection('specialties')
+                .find({}, collectionConfig.specialties)
+                .toArray(),
+            
+            interactions: db.collection('interactions')
+                .find({}, collectionConfig.interactions)
+                .sort({ createdAt: -1 })
+                .skip(hasPagination ? skip : 0)
+                .limit(hasPagination ? limit : 0)
+                .toArray()
         };
 
-        // 🔹 Exécution avec gestion d'erreur par collection
+        // 🔹 EXÉCUTION PARALLÈLE AVEC GESTION D'ERREUR
         const results = await Promise.allSettled(Object.values(collectionPromises));
 
-        const [
-            membersResult,
-            projectsResult,
-            groupsResult,
-            analysesResult,
-            skillsResult,
-            specialtiesResult,
-            interactionsResult
-        ] = results;
+        // 🔹 EXTRACTION DES DONNÉES AVEC GESTION D'ERREUR
+        const members = handleCollectionError(results[0], 'members', log, error, []);
+        const projects = handleCollectionError(results[1], 'projects', log, error, []);
+        const groups = handleCollectionError(results[2], 'groups', log, error, []);
+        const analyses = handleCollectionError(results[3], 'analyses', log, error, []);
+        const skills = handleCollectionError(results[4], 'skills', log, error, []);
+        const specialties = handleCollectionError(results[5], 'specialties', log, error, []);
+        const interactions = handleCollectionError(results[6], 'interactions', log, error, []);
 
-        // 🔹 Extraction des données avec fallback
-        const members = membersResult.status === 'fulfilled' ? membersResult.value : [];
-        const projects = projectsResult.status === 'fulfilled' ? projectsResult.value : [];
-        const groups = groupsResult.status === 'fulfilled' ? groupsResult.value : [];
-        const analyses = analysesResult.status === 'fulfilled' ? analysesResult.value : [];
-        const skills = skillsResult.status === 'fulfilled' ? skillsResult.value : [];
-        const specialties = specialtiesResult.status === 'fulfilled' ? specialtiesResult.value : [];
-        const interactions = interactionsResult.status === 'fulfilled' ? interactionsResult.value : [];
-
-        // 🔹 Log des erreurs individuelles
-        const errors = results.filter(result => result.status === 'rejected');
-        if (errors.length > 0) {
-            log(`⚠️ ${errors.length} collection(s) avec erreurs:`);
-            errors.forEach((err, index) => {
-                const collectionNames = Object.keys(collectionPromises);
-                const failedIndex = results.findIndex(r => r.status === 'rejected');
-                const failedKey = collectionNames[failedIndex];
-                error(`❌ Erreur collection ${failedKey}: ${err.reason?.message || 'Erreur inconnue'}`);
-            });
+        // 🔹 VALIDATION DES DONNÉES CRITIQUES
+        const validation = validateCriticalData(members, projects);
+        if (validation.errors.length > 0) {
+            error(`❌ Erreurs de validation: ${validation.errors.join(', ')}`);
+        }
+        if (validation.warnings.length > 0) {
+            log(`⚠️ Avertissements: ${validation.warnings.join(', ')}`);
         }
 
         log(`✅ Données brutes récupérées: ${members.length} membres, ${projects.length} projets`);
 
-        // 🔹 CORRECTION OPTIMISÉE DES MEMBRES
+        // 🔹 FORMATAGE OPTIMISÉ DES MEMBRES
         const formattedMembers = formatCollection(members, (member) => {
             const memberSpecialties = cleanArray(member.specialties, 'specialties');
             const memberSkills = cleanArray(member.skills, 'skills');
@@ -198,13 +399,9 @@ export default async function handler({ req, res, log, error }) {
                 updatedAt: member.updatedAt || new Date()
             };
         }, 'membres');
-        
-        // 🔹 CALCUL DES STATISTIQUES
-        const stats = calculateStats(formattedMembers);
-        
+
         // 🔹 FORMATAGE DES PROJETS
         const formattedProjects = formatCollection(projects, (project) => {
-            // S'assurer que members est toujours un tableau
             let projectMembers = [];
             if (Array.isArray(project.members)) {
                 projectMembers = project.members.map(m => m?.toString()).filter(Boolean);
@@ -236,10 +433,12 @@ export default async function handler({ req, res, log, error }) {
             tags: Array.isArray(group.tags) ? group.tags : [],
             members: group.members ? group.members.map(m => m?.toString()).filter(Boolean) : [],
             leader: group.leader?.toString() || null,
-            memberCount: group.members ? group.members.length : 0
+            memberCount: group.members ? group.members.length : 0,
+            autoCreated: group.autoCreated || false,
+            creationType: group.creationType || 'manual'
         }), 'groupes');
 
-        // 🔹 FORMATAGE DES ANALYSES
+        // 🔹 FORMATAGE DES AUTRES COLLECTIONS
         const formattedAnalyses = formatCollection(analyses, (analysis) => ({
             _id: analysis._id?.toString(),
             type: analysis.type || 'interaction_analysis',
@@ -252,7 +451,6 @@ export default async function handler({ req, res, log, error }) {
             analysisTimestamp: analysis.analysisTimestamp || analysis.createdAt
         }), 'analyses');
 
-        // 🔹 FORMATAGE DES COMPÉTENCES
         const formattedSkills = formatCollection(skills, (skill) => ({
             _id: skill._id?.toString(),
             name: skill.name || '',
@@ -261,7 +459,6 @@ export default async function handler({ req, res, log, error }) {
             memberCount: skill.memberCount || 0
         }), 'compétences');
 
-        // 🔹 FORMATAGE DES SPÉCIALITÉS
         const formattedSpecialties = formatCollection(specialties, (specialty) => ({
             _id: specialty._id?.toString(),
             name: specialty.name || '',
@@ -270,7 +467,6 @@ export default async function handler({ req, res, log, error }) {
             memberCount: specialty.memberCount || 0
         }), 'spécialités');
 
-        // 🔹 FORMATAGE DES INTERACTIONS
         const formattedInteractions = formatCollection(interactions, (interaction) => ({
             _id: interaction._id?.toString(),
             type: interaction.type || 'message',
@@ -283,18 +479,28 @@ export default async function handler({ req, res, log, error }) {
             participantCount: 1 + (interaction.to ? interaction.to.length : 0)
         }), 'interactions');
 
+        // 🔹 CALCUL DES STATISTIQUES AVANCÉES
+        const enhancedStats = calculateEnhancedStats(
+            formattedMembers, 
+            formattedProjects, 
+            formattedGroups,
+            formattedSkills,
+            formattedSpecialties
+        );
+
         await client.close();
         log("✅ Connexion MongoDB fermée");
 
-        // 🔹 PRÉPARATION DE LA RÉPONSE
+        // 🔹 PRÉPARATION DE LA RÉPONSE COMPLÈTE
         const responseData = {
             success: true,
+            timestamp: new Date().toISOString(),
 
             // Format principal pour compatibilité
             projects: formattedProjects,
             members: formattedMembers,
 
-            // Structure complète
+            // Structure complète organisée
             data: {
                 members: formattedMembers,
                 projects: formattedProjects,
@@ -316,15 +522,30 @@ export default async function handler({ req, res, log, error }) {
                     specialties: formattedSpecialties.length,
                     interactions: formattedInteractions.length
                 },
-                skillsStats: stats,
-                collectionErrors: errors.length,
-                timestamp: new Date().toISOString(),
+                statistics: enhancedStats,
+                pagination: hasPagination ? { limit, skip } : null,
+                validation: {
+                    errors: validation.errors,
+                    warnings: validation.warnings
+                },
+                performance: {
+                    cached: false,
+                    fromCache: false,
+                    processingTime: Date.now() - (cacheTimestamp || Date.now())
+                },
                 database: DB_NAME,
-                version: '2.0.0'
+                version: '3.0.0'
             },
             
-            message: `Données chargées: ${formattedMembers.length} membres, ${formattedProjects.length} projets, ${stats.collectionErrors} erreurs de collection`
+            message: `Données chargées avec succès: ${formattedMembers.length} membres, ${formattedProjects.length} projets, ${formattedGroups.length} groupes`
         };
+
+        // 🔹 MISE EN CACHE
+        if (useCache) {
+            cache = responseData;
+            cacheTimestamp = Date.now();
+            log("✅ Données mises en cache pour 5 minutes");
+        }
 
         log(`✅ Réponse préparée: ${formattedMembers.length} membres, ${formattedProjects.length} projets`);
         return res.json(responseData);
@@ -334,11 +555,17 @@ export default async function handler({ req, res, log, error }) {
         if (client) {
             await client.close().catch(e => error("Erreur fermeture client: " + e.message));
         }
+        
         return res.json({
             success: false,
             message: "Erreur lors du chargement des données",
             error: process.env.NODE_ENV === 'development' ? err.message : 'Contactez l\'administrateur',
-            timestamp: new Date().toISOString()
+            timestamp: new Date().toISOString(),
+            fallbackData: {
+                members: [],
+                projects: [],
+                groups: []
+            }
         });
     }
 }
