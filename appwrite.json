@@ -4,43 +4,46 @@
       "$id": "get-matrice",
       "name": "get-matrice (GET All Data)", 
       "runtime": "node-18.0",
-      "path": "functions/get-matrice", // 👈 Chemin vers le dossier de la fonction
-      "entrypoint": "index.js",        // 👈 Le point d'entrée natif
-      "ignore": [
-        "node_modules",
-        ".git",
-        "README.md"
-      ],
-      "execute": ["any"],              // Autorise l'exécution par le public/client
+      "path": "functions/get-matrice",
+      "entrypoint": "index.js",
+      "ignore": ["node_modules", ".git", "README.md"],
+      "execute": ["any"],
       "timeout": 900
     },
     {
       "$id": "analyses-crud",
       "name": "analyses-crud (POST/PUT/DELETE)", 
       "runtime": "node-18.0",
-      "path": "functions/analyses-crud", // 👈 Chemin vers le dossier de la fonction
+      "path": "functions/analyses-crud",
       "entrypoint": "index.js",
-      "ignore": [
-        "node_modules",
-        ".git",
-        "README.md"
-      ],
-      "execute": ["users"],             // 👈 Restreindre l'exécution aux utilisateurs logués ou à une clé API
+      "ignore": ["node_modules", ".git", "README.md"],
+      "execute": ["users"],
       "timeout": 900
     },
     {
       "$id": "generic-crud",
       "name": "generic-crud (Members, Projects, etc.)", 
       "runtime": "node-18.0",
-      "path": "functions/generic-crud", // 👈 Chemin vers le dossier de la fonction
+      "path": "functions/generic-crud",
       "entrypoint": "index.js",
-      "ignore": [
-        "node_modules",
-        ".git",
-        "README.md"
-      ],
-      "execute": ["users"],             // 👈 Restreindre l'exécution aux utilisateurs logués ou à une clé API
+      "ignore": ["node_modules", ".git", "README.md"],
+      "execute": ["users"],
       "timeout": 900
+    },
+    {
+      "$id": "deepseek-ai",
+      "name": "deepseek-ai (AI Integration)", 
+      "runtime": "node-18.0",
+      "path": "functions/deepseek-ai",
+      "entrypoint": "index.js",
+      "ignore": ["node_modules", ".git", "README.md"],
+      "execute": ["users"],  // Ou "any" selon votre besoin de sécurité
+      "timeout": 900,
+      "variables": {
+        "MONGODB_URI": "{{your-mongodb-uri}}",
+        "MONGODB_DB_NAME": "matrice",
+        "DEEPSEEK_API_KEY": "{{your-deepseek-api-key}}"
+      }
     }
   ]
 }
