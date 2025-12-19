@@ -1,9 +1,15 @@
 {
   "name": "deepseek-ai",
   "version": "1.0.0",
-  "description": "Fonction AppWrite pour intégration DeepSeek AI",
-  "main": "src/index.js",
+  "description": "AppWrite function for DeepSeek AI integration",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
   "dependencies": {
     "mongodb": "^6.0.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
   }
 }
