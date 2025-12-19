@@ -1,364 +1,482 @@
 import { MongoClient, ObjectId } from 'mongodb';
 
-// Cache MongoDB
+// ========== CONFIGURATION ==========
+const MONGODB_URI = process.env.MONGODB_URI;
+const MONGODB_DB_NAME = process.env.MONGODB_DB_NAME || "matrice";
+const DEEPSEEK_API_KEY = process.env.DEEPSEEK_API_KEY;
+
+if (!MONGODB_URI) {
+  throw new Error('MONGODB_URI environment variable is required');
+}
+
+// Cache pour la connexion MongoDB
 let mongoClient = null;
-let db = null;
 
 async function getDatabase() {
   if (!mongoClient) {
-    mongoClient = new MongoClient(process.env.MONGODB_URI);
+    mongoClient = new MongoClient(MONGODB_URI);
     await mongoClient.connect();
-    db = mongoClient.db(process.env.MONGODB_DB_NAME || "matrice");
   }
-  return db;
+  return mongoClient.db(MONGODB_DB_NAME);
 }
 
-// Fonction pour appeler DeepSeek API
+// ========== DEEPSEEK API SERVICE ==========
 async function callDeepSeekAPI(messages, options = {}) {
-  const DEEPSEEK_API_KEY = process.env.DEEPSEEK_API_KEY;
-  
   if (!DEEPSEEK_API_KEY) {
-    throw new Error('DEEPSEEK_API_KEY non configurée');
+    throw new Error('DeepSeek API key not configured. Please set DEEPSEEK_API_KEY environment variable.');
   }
 
-  const response = await fetch('https://api.deepseek.com/v1/chat/completions', {
-    method: 'POST',
-    headers: {
-      'Authorization': `Bearer ${DEEPSEEK_API_KEY}`,
-      'Content-Type': 'application/json',
-      'Accept': 'application/json'
-    },
-    body: JSON.stringify({
-      model: options.model || 'deepseek-chat',
-      messages,
-      max_tokens: options.max_tokens || 1000,
-      temperature: options.temperature || 0.7,
-      stream: false
-    }),
-    timeout: 30000
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 30000);
+
+  try {
+    const response = await fetch('https://api.deepseek.com/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${DEEPSEEK_API_KEY}`,
+        'Content-Type': 'application/json',
+        'Accept': 'application/json'
+      },
+      body: JSON.stringify({
+        model: options.model || 'deepseek-chat',
+        messages,
+        max_tokens: options.max_tokens || 1000,
+        temperature: options.temperature || 0.7,
+        stream: false
+      }),
+      signal: controller.signal
+    });
+
+    clearTimeout(timeoutId);
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(errorData.error?.message || `API Error: ${response.status} ${response.statusText}`);
+    }
+
+    return await response.json();
+  } catch (error) {
+    clearTimeout(timeoutId);
+    if (error.name === 'AbortError') {
+      throw new Error('DeepSeek API timeout after 30 seconds');
+    }
+    throw error;
+  }
+}
+
+// ========== AI SERVICES ==========
+
+// 1. Test de connexion simple
+async function testConnection() {
+  const response = await callDeepSeekAPI([
+    { role: 'user', content: 'Réponds uniquement par "OK" si tu fonctionnes.' }
+  ], {
+    max_tokens: 10,
+    temperature: 0.1
   });
 
-  if (!response.ok) {
-    const errorData = await response.json();
-    throw new Error(errorData.error?.message || `API Error: ${response.status}`);
-  }
-
-  return await response.json();
+  return {
+    status: 'connected',
+    response: response.choices[0]?.message?.content,
+    model: response.model,
+    timestamp: new Date().toISOString()
+  };
 }
 
-// ========== SERVICES AI ==========
-
-// 1. Analyse de synergie entre membres
-async function analyzeSynergy(member1Id, member2Id, projectId = null) {
-  const db = await getDatabase();
+// 2. Analyse de synergie entre membres (compatible avec votre structure)
+async function analyzeSynergy(data) {
+  const { member1, member2, project, context } = data;
   
-  // Récupérer les données depuis MongoDB
-  const [member1, member2, project] = await Promise.all([
-    db.collection('members').findOne({ _id: new ObjectId(member1Id) }),
-    db.collection('members').findOne({ _id: new ObjectId(member2Id) }),
-    projectId ? db.collection('projects').findOne({ _id: new ObjectId(projectId) }) : Promise.resolve(null)
-  ]);
-
   if (!member1 || !member2) {
-    throw new Error('Membre(s) non trouvé(s)');
+    throw new Error('Both member1 and member2 IDs are required');
   }
 
+  const db = await getDatabase();
+  
+  // Récupération des données depuis MongoDB (compatible avec vos autres fonctions)
+  const [member1Data, member2Data, projectData] = await Promise.all([
+    db.collection('members').findOne({ _id: new ObjectId(member1) }),
+    db.collection('members').findOne({ _id: new ObjectId(member2) }),
+    project ? db.collection('projects').findOne({ _id: new ObjectId(project) }) : Promise.resolve(null)
+  ]);
+
+  if (!member1Data || !member2Data) {
+    throw new Error('One or both members not found');
+  }
+
+  // Construction du prompt optimisé
   const prompt = `
-    Analyse la synergie professionnelle entre deux collaborateurs pour un projet.
-    
-    MEMBRE 1: ${member1.name}
-    Compétences: ${Array.isArray(member1.skills) ? member1.skills.join(', ') : 'Non spécifié'}
-    Spécialités: ${Array.isArray(member1.specialties) ? member1.specialties.join(', ') : 'Non spécifié'}
-    ${member1.title ? `Poste: ${member1.title}` : ''}
-    ${member1.experienceYears ? `Expérience: ${member1.experienceYears} ans` : ''}
-    
-    MEMBRE 2: ${member2.name}
-    Compétences: ${Array.isArray(member2.skills) ? member2.skills.join(', ') : 'Non spécifié'}
-    Spécialités: ${Array.isArray(member2.specialties) ? member2.specialties.join(', ') : 'Non spécifié'}
-    ${member2.title ? `Poste: ${member2.title}` : ''}
-    ${member2.experienceYears ? `Expérience: ${member2.experienceYears} ans` : ''}
-    
-    ${project ? `
-    PROJET: ${project.title || 'Sans titre'}
-    Description: ${project.description || 'Non spécifiée'}
-    ` : 'Contexte: Collaboration générale'}
-    
-    Fournis une analyse structurée en français avec:
-    1. Score de complémentarité (1-10) avec justification
-    2. Forces de cette combinaison
-    3. Risques ou points d'attention
-    4. 3 recommandations concrètes pour maximiser la collaboration
-    
-    Sois professionnel, concis et pratique.
+    Analyse de synergie professionnelle - Format structuré
+
+    CONTEXTE: ${context || 'Collaboration générale entre collaborateurs'}
+
+    PROFIL 1:
+    - Nom: ${member1Data.name || 'Non renseigné'}
+    - Poste: ${member1Data.title || 'Non spécifié'}
+    - Compétences techniques: ${Array.isArray(member1Data.skills) ? member1Data.skills.join(', ') : 'Non spécifié'}
+    - Spécialités: ${Array.isArray(member1Data.specialties) ? member1Data.specialties.join(', ') : 'Non spécifié'}
+    ${member1Data.experienceYears ? `- Expérience: ${member1Data.experienceYears} ans` : ''}
+    ${member1Data.organization ? `- Organisation: ${member1Data.organization}` : ''}
+
+    PROFIL 2:
+    - Nom: ${member2Data.name || 'Non renseigné'}
+    - Poste: ${member2Data.title || 'Non spécifié'}
+    - Compétences techniques: ${Array.isArray(member2Data.skills) ? member2Data.skills.join(', ') : 'Non spécifié'}
+    - Spécialités: ${Array.isArray(member2Data.specialties) ? member2Data.specialties.join(', ') : 'Non spécifié'}
+    ${member2Data.experienceYears ? `- Expérience: ${member2Data.experienceYears} ans` : ''}
+    ${member2Data.organization ? `- Organisation: ${member2Data.organization}` : ''}
+
+    ${projectData ? `
+    PROJET:
+    - Titre: ${projectData.title || 'Non spécifié'}
+    - Description: ${projectData.description || 'Non spécifiée'}
+    ${Array.isArray(projectData.tags) ? `- Tags: ${projectData.tags.join(', ')}` : ''}
+    ` : ''}
+
+    ANALYSE REQUISE:
+    Fournis une analyse en français avec les sections suivantes:
+
+    🔍 COMPLÉMENTARITÉ (Score 1-10)
+    • Justification du score
+    • Points forts de cette combinaison
+    • Compétences complémentaires identifiées
+
+    ⚠️ POINTS DE VIGILANCE
+    • Risques potentiels
+    • Éléments à surveiller
+    • Défis anticipés
+
+    🎯 RECOMMANDATIONS PRATIQUES
+    1. Pour maximiser la collaboration
+    2. Pour le manager/chef de projet
+    3. Pour les ressources RH
+
+    📊 IMPACT POTENTIEL
+    • Sur la productivité
+    • Sur l'innovation
+    • Sur la dynamique d'équipe
+
+    Ton: Professionnel, factuel, pragmatique. Maximum 400 mots.
   `;
 
   const response = await callDeepSeekAPI([
     {
       role: 'system',
-      content: 'Tu es un expert en ressources humaines et optimisation d\'équipes. Tu analyses les synergies professionnelles avec précision et pragmatisme.'
+      content: `Tu es un expert en ressources humaines et optimisation d'équipes avec 15 ans d'expérience.
+                Tu analyses les synergies professionnelles avec précision et fournis des recommandations actionnables.
+                Tu réponds toujours en français avec un ton professionnel.`
     },
     { role: 'user', content: prompt }
   ]);
 
   const analysis = response.choices[0]?.message?.content;
 
-  // Sauvegarder l'analyse dans MongoDB
+  // Sauvegarde dans la collection 'analyses' (compatible avec analyses-crud)
   const analysisRecord = {
-    type: 'member_synergy_analysis',
-    title: `Synergie ${member1.name} & ${member2.name}`,
-    member1: member1Id,
-    member2: member2Id,
-    project: projectId,
-    analysis,
-    aiModel: 'deepseek-chat',
-    synergyScore: extractSynergyScore(analysis), // Fonction à implémenter
+    type: 'synergy_analysis',
+    title: `Synergie: ${member1Data.name} & ${member2Data.name}`,
+    description: `Analyse de synergie générée par IA`,
+    member1: member1,
+    member2: member2,
+    project: project || null,
+    analysis: analysis,
+    insights: {
+      member1Name: member1Data.name,
+      member2Name: member2Data.name,
+      projectName: projectData?.title || null,
+      generatedAt: new Date()
+    },
+    statistics: {
+      aiModel: 'deepseek-chat',
+      tokensUsed: response.usage?.total_tokens || 0,
+      processingTime: 'ai_enhanced'
+    },
+    status: 'completed',
+    analysisTimestamp: new Date(),
     createdAt: new Date(),
     updatedAt: new Date()
   };
 
-  const result = await db.collection('synergy_analyses').insertOne(analysisRecord);
+  // Utilise la même collection que votre fonction analyses-crud
+  const result = await db.collection('analyses').insertOne(analysisRecord);
 
   return {
     success: true,
-    analysis,
+    analysis: analysis,
     analysisId: result.insertedId.toString(),
     members: {
-      member1: { name: member1.name, id: member1Id },
-      member2: { name: member2.name, id: member2Id }
+      member1: { id: member1, name: member1Data.name },
+      member2: { id: member2, name: member2Data.name }
     },
-    project: project ? { title: project.title, id: projectId } : null
+    project: projectData ? { id: project, title: projectData.title } : null,
+    metadata: {
+      model: response.model,
+      tokens: response.usage,
+      timestamp: new Date().toISOString()
+    }
   };
 }
 
-// 2. Recommandations d'équipe pour un projet
-async function recommendTeamForProject(projectId, options = {}) {
+// 3. Recommandations pour composition d'équipe
+async function recommendTeam(data) {
+  const { projectId, teamSize = 4, requiredSkills = [] } = data;
+  
+  if (!projectId) {
+    throw new Error('Project ID is required');
+  }
+
   const db = await getDatabase();
   
   const project = await db.collection('projects').findOne({ _id: new ObjectId(projectId) });
   if (!project) {
-    throw new Error('Projet non trouvé');
+    throw new Error('Project not found');
   }
 
-  // Récupérer tous les membres disponibles
-  const allMembers = await db.collection('members')
-    .find({ isActive: true })
-    .project({ name: 1, skills: 1, specialties: 1, title: 1, experienceYears: 1 })
+  // Récupère tous les membres actifs (compatible avec get-matrice)
+  const members = await db.collection('members')
+    .find({ 
+      isActive: true,
+      ...(requiredSkills.length > 0 ? {
+        skills: { $in: requiredSkills }
+      } : {})
+    })
+    .project({ name: 1, title: 1, skills: 1, specialties: 1, experienceYears: 1, organization: 1 })
     .toArray();
 
-  const prompt = `
-    Recommande la composition d'une équipe optimale pour ce projet.
-    
-    PROJET: ${project.title}
-    Description: ${project.description || 'Non spécifiée'}
-    
-    Membres disponibles (${allMembers.length}):
-    ${allMembers.map((m, i) => `
-      ${i+1}. ${m.name}
-      - Poste: ${m.title || 'Non spécifié'}
-      - Compétences: ${Array.isArray(m.skills) ? m.skills.slice(0, 5).join(', ') : 'Non spécifié'}
-      - Spécialités: ${Array.isArray(m.specialties) ? m.specialties.slice(0, 3).join(', ') : 'Non spécifié'}
-      ${m.experienceYears ? `- Expérience: ${m.experienceYears} ans` : ''}
-    `).join('\n')}
-    
-    Contraintes:
-    - Taille équipe recommandée: ${options.teamSize || 3-5} personnes
-    - Compétences requises: ${Array.isArray(project.tags) ? project.tags.join(', ') : 'Aucune spécifique'}
-    
-    Fournis:
-    1. Proposition d'équipe idéale (noms + rôles)
-    2. Justification pour chaque membre
-    3. Complémentarité globale
-    4. Points de vigilance
-    
-    Réponse en français, format structuré.
-  `;
-
-  const response = await callDeepSeekAPI([
-    {
-      role: 'system',
-      content: 'Tu es un chef de projet expérimenté spécialisé dans la composition d\'équipes performantes.'
-    },
-    { role: 'user', content: prompt }
-  ]);
-
-  return {
-    success: true,
-    project: { title: project.title, id: projectId },
-    recommendations: response.choices[0]?.message?.content,
-    totalMembersConsidered: allMembers.length,
-    timestamp: new Date().toISOString()
-  };
-}
-
-// 3. Générer des descriptions de projet
-async function generateProjectDescription(projectData) {
-  const prompt = `
-    Génère une description professionnelle pour un projet.
-    
-    Titre: ${projectData.title}
-    Objectifs: ${projectData.objectives || 'Non spécifiés'}
-    Technologies: ${Array.isArray(projectData.technologies) ? projectData.technologies.join(', ') : 'Non spécifiées'}
-    Durée estimée: ${projectData.duration || 'Non spécifiée'}
-    Budget: ${projectData.budget || 'Non spécifié'}
-    
-    Format souhaité:
-    1. Présentation générale
-    2. Objectifs principaux
-    3. Technologies utilisées
-    4. Livrables attendus
-    5. Équipe recommandée
-    6. Planning estimé
-    
-    Ton: Professionnel, motivant, clair.
-  `;
-
-  const response = await callDeepSeekAPI([
-    {
-      role: 'system',
-      content: 'Tu es un consultant en gestion de projet et rédaction de documents professionnels.'
-    },
-    { role: 'user', content: prompt }
-  ]);
-
-  return {
-    success: true,
-    description: response.choices[0]?.message?.content,
-    rawPrompt: prompt,
-    timestamp: new Date().toISOString()
-  };
-}
-
-// 4. Test de connexion à DeepSeek
-async function testDeepSeekConnection() {
-  try {
-    const response = await callDeepSeekAPI([
-      { role: 'user', content: 'Réponds par "OK" si tu es fonctionnel.' }
-    ], {
-      max_tokens: 10,
-      temperature: 0.1
-    });
-
-    return {
-      success: true,
-      status: 'connected',
-      response: response.choices[0]?.message?.content,
-      model: response.model,
-      timestamp: new Date().toISOString()
-    };
-  } catch (error) {
-    return {
-      success: false,
-      status: 'error',
-      error: error.message,
-      timestamp: new Date().toISOString()
-    };
+  if (members.length === 0) {
+    throw new Error('No active members found' + (requiredSkills.length > 0 ? ' with required skills' : ''));
   }
+
+  const prompt = `
+    Composition d'équipe optimale - Analyse IA
+
+    PROJET:
+    - Titre: ${project.title}
+    - Description: ${project.description || 'Non spécifiée'}
+    ${Array.isArray(project.tags) ? `- Technologies/Tags: ${project.tags.join(', ')}` : ''}
+    ${project.status ? `- Statut: ${project.status}` : ''}
+
+    CONTRAINTES:
+    - Taille équipe cible: ${teamSize} personnes
+    ${requiredSkills.length > 0 ? `- Compétences requises: ${requiredSkills.join(', ')}` : ''}
+    - Membres disponibles: ${members.length} personnes
+
+    PROFILS DISPONIBLES:
+    ${members.map((m, i) => `
+    ${i+1}. ${m.name}
+        • Poste: ${m.title || 'Non spécifié'}
+        • Compétences: ${Array.isArray(m.skills) ? m.skills.slice(0, 5).join(', ') : 'Non spécifié'}
+        • Spécialités: ${Array.isArray(m.specialties) ? m.specialties.slice(0, 3).join(', ') : 'Non spécifié'}
+        ${m.experienceYears ? `• Expérience: ${m.experienceYears} ans` : ''}
+    `).join('\n')}
+
+    TÂCHE:
+    Propose 3 scénarios d'équipe différents en fonction des objectifs:
+
+    🥇 ÉQUIPE OPTIMALE (Performance maximale)
+    • Composition idéale
+    • Justification par profil
+    • Rôles recommandés
+
+    ⚖️ ÉQUIPE ÉQUILIBRÉE (Compromis optimal)
+    • Bon rapport compétences/expérience
+    • Diversité des profils
+    • Facile à manager
+
+    💡 ÉQUIPE INNOVANTE (Creative & Risque)
+    • Profils disruptifs
+    • Potentiel d'innovation
+    • Management adapté
+
+    Pour chaque scénario:
+    1. Liste des membres recommandés (noms)
+    2. Structure de l'équipe (rôles)
+    3. Forces principales
+    4. Points d'attention
+    5. Recommandations de management
+
+    Format: Structuré, clair, prêt à l'emploi. Maximum 500 mots.
+  `;
+
+  const response = await callDeepSeekAPI([
+    {
+      role: 'system',
+      content: `Tu es un consultant expert en composition d'équipes et management de projet.
+                Tu as une expérience internationale dans des entreprises tech.
+                Tu fournis des analyses pragmatiques et actionnables.`
+    },
+    { role: 'user', content: prompt }
+  ]);
+
+  return {
+    success: true,
+    project: { id: projectId, title: project.title },
+    recommendations: response.choices[0]?.message?.content,
+    metadata: {
+      totalMembersConsidered: members.length,
+      teamSizeRequested: teamSize,
+      requiredSkills: requiredSkills,
+      timestamp: new Date().toISOString(),
+      model: response.model
+    }
+  };
 }
 
-// ========== ROUTEUR ==========
+// 4. Chat générique pour autres usages
+async function chatCompletion(data) {
+  const { messages, model, temperature, max_tokens } = data;
+  
+  if (!messages || !Array.isArray(messages)) {
+    throw new Error('Messages array is required');
+  }
 
+  const response = await callDeepSeekAPI(messages, {
+    model,
+    temperature,
+    max_tokens
+  });
+
+  return {
+    success: true,
+    response: response.choices[0]?.message?.content,
+    usage: response.usage,
+    model: response.model
+  };
+}
+
+// ========== ROUTER ==========
 const router = {
-  // Test de connexion
-  'POST /test': testDeepSeekConnection,
-  
+  // Test endpoint
+  'POST /test': async () => ({
+    success: true,
+    ...await testConnection()
+  }),
+
   // Analyse de synergie
-  'POST /synergy': async (body) => {
-    const { member1, member2, project } = body;
-    if (!member1 || !member2) {
-      throw new Error('Les IDs des deux membres sont requis');
-    }
-    return await analyzeSynergy(member1, member2, project);
-  },
-  
+  'POST /synergy': async (body) => ({
+    success: true,
+    ...await analyzeSynergy(body)
+  }),
+
   // Recommandations d'équipe
-  'POST /team-recommendations': async (body) => {
-    const { projectId, teamSize } = body;
-    if (!projectId) {
-      throw new Error('L\'ID du projet est requis');
-    }
-    return await recommendTeamForProject(projectId, { teamSize });
-  },
-  
-  // Génération de descriptions
-  'POST /generate-description': async (body) => {
-    return await generateProjectDescription(body);
-  },
-  
-  // Chat générique (pour d'autres usages)
-  'POST /chat': async (body) => {
-    const { messages, model, temperature, max_tokens } = body;
-    if (!messages || !Array.isArray(messages)) {
-      throw new Error('Le champ messages est requis et doit être un tableau');
-    }
+  'POST /team': async (body) => ({
+    success: true,
+    ...await recommendTeam(body)
+  }),
+
+  // Chat générique
+  'POST /chat': async (body) => ({
+    success: true,
+    ...await chatCompletion(body)
+  }),
+
+  // Génération de contenu (descriptions, emails, etc.)
+  'POST /generate': async (body) => {
+    const { type, content, context } = body;
     
-    const response = await callDeepSeekAPI(messages, {
-      model,
-      temperature,
-      max_tokens
-    });
-    
+    const prompts = {
+      project_description: `Génère une description professionnelle de projet:\n${content}\nContexte: ${context}`,
+      email: `Rédige un email professionnel:\n${content}\nTon: ${context || 'professionnel'}`,
+      summary: `Fais un résumé structuré de:\n${content}`,
+      ideas: `Génère des idées créatives pour:\n${content}`
+    };
+
+    const prompt = prompts[type] || `Tâche: ${type}\nContenu: ${content}\nContexte: ${context}`;
+
+    const response = await callDeepSeekAPI([
+      {
+        role: 'system',
+        content: 'Tu es un assistant professionnel spécialisé dans la rédaction et la génération de contenu.'
+      },
+      { role: 'user', content: prompt }
+    ]);
+
     return {
       success: true,
-      response: response.choices[0]?.message?.content,
-      usage: response.usage,
+      content: response.choices[0]?.message?.content,
+      type,
       model: response.model
     };
   }
 };
 
-// ========== HANDLER PRINCIPAL ==========
-
+// ========== MAIN HANDLER ==========
 export default async function handler({ req, res, log, error }) {
-  log(`🤖 DeepSeek AI Function - ${req.method} ${req.path}`);
-  
+  log(`🤖 DeepSeek AI - ${req.method} ${req.path || '/'}`);
+
   try {
     const { method, path, body } = req;
-    const bodyData = body ? JSON.parse(body) : {};
     
-    // Trouver la route correspondante
+    // Parse le body
+    let bodyData = {};
+    if (body) {
+      try {
+        bodyData = typeof body === 'string' ? JSON.parse(body) : body;
+      } catch (e) {
+        return res.json({
+          success: false,
+          error: 'Invalid JSON body',
+          timestamp: new Date().toISOString()
+        }, 400);
+      }
+    }
+
+    // Route par défaut (GET /)
+    if (method === 'GET' && (!path || path === '/')) {
+      return res.json({
+        success: true,
+        service: 'DeepSeek AI Integration',
+        version: '1.0.0',
+        endpoints: [
+          'POST /test - Test connection',
+          'POST /synergy - Analyze member synergy',
+          'POST /team - Recommend team composition',
+          'POST /chat - Generic chat completion',
+          'POST /generate - Content generation'
+        ],
+        timestamp: new Date().toISOString()
+      });
+    }
+
+    // Trouver la route
     const routeKey = `${method} ${path}`;
     const routeHandler = router[routeKey];
-    
+
     if (!routeHandler) {
       return res.json({
         success: false,
-        error: 'Route non trouvée',
-        availableRoutes: Object.keys(router)
+        error: 'Route not found',
+        availableRoutes: Object.keys(router),
+        timestamp: new Date().toISOString()
       }, 404);
     }
-    
+
     // Exécuter le handler
     const result = await routeHandler(bodyData);
     
     return res.json({
-      success: true,
       ...result,
       timestamp: new Date().toISOString()
     });
-    
+
   } catch (err) {
-    error('❌ Erreur DeepSeek AI:', err);
+    error('❌ DeepSeek AI Error:', err);
     
     return res.json({
       success: false,
       error: err.message,
       timestamp: new Date().toISOString()
     }, 500);
+    
   } finally {
-    // Fermer la connexion MongoDB si elle existe
+    // Fermer la connexion MongoDB
     if (mongoClient) {
-      await mongoClient.close();
+      try {
+        await mongoClient.close();
+      } catch (e) {
+        error('Error closing MongoDB connection:', e);
+      }
       mongoClient = null;
-      db = null;
     }
   }
-}
-
-// ========== UTILITAIRES ==========
-
-function extractSynergyScore(analysis) {
-  // Extraction simple d'un score dans le texte
-  const scoreMatch = analysis.match(/Score.*?(\d+(?:\.\d+)?)\/10/) || 
-                    analysis.match(/complémentarité.*?(\d+(?:\.\d+)?)/i);
-  return scoreMatch ? parseFloat(scoreMatch[1]) : null;
 }
