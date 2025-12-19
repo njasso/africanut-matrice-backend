@@ -1,0 +1,9 @@
+{
+  "name": "deepseek-ai",
+  "version": "1.0.0",
+  "description": "Fonction AppWrite pour intégration DeepSeek AI",
+  "main": "src/index.js",
+  "dependencies": {
+    "mongodb": "^6.0.0"
+  }
+}
