@@ -1,4 +1,4 @@
-// functions/deepseek-ai/index.js - VERSION COMPLÈTE ET FONCTIONNELLE
+// functions/deepseek-ai/index.js - MOVE THIS FILE HERE
 import { MongoClient, ObjectId } from 'mongodb';
 
 export default async function handler({ req, res, log, error }) {
