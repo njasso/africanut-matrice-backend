@@ -1,3 +1,6 @@
+// functions/deepseek-ai/index.js - VERSION COMPLÈTE ET FONCTIONNELLE
+import { MongoClient, ObjectId } from 'mongodb';
+
 export default async function handler({ req, res, log, error }) {
   log(`🤖 DeepSeek AI Handler - ${req.method} ${req.path || '/'}`);
   
@@ -30,7 +33,7 @@ export default async function handler({ req, res, log, error }) {
       return res.json({
         success: true,
         service: 'DeepSeek AI Integration',
-        version: '4.0.0',
+        version: '5.0.0',
         status: 'active',
         endpoints: [
           'POST - test_connection',
@@ -227,13 +230,15 @@ async function handleAnalyzeSynergy(data, res, log, errorLog) {
   });
 
   let db = null;
+  let localMongoClient = null;
+  
   try {
     // Connexion à MongoDB si URI disponible
     if (MONGODB_URI) {
       try {
-        const mongoClient = new MongoClient(MONGODB_URI);
-        await mongoClient.connect();
-        db = mongoClient.db(MONGODB_DB_NAME);
+        localMongoClient = new MongoClient(MONGODB_URI);
+        await localMongoClient.connect();
+        db = localMongoClient.db(MONGODB_DB_NAME);
         log('✅ MongoDB connecté');
       } catch (mongoError) {
         log('⚠️ MongoDB non disponible:', mongoError.message);
@@ -245,8 +250,6 @@ async function handleAnalyzeSynergy(data, res, log, errorLog) {
     let member2Data = typeof member2 === 'object' ? member2 : null;
 
     if (db) {
-      const { MongoClient, ObjectId } = await import('mongodb');
-      
       if (!member1Data && member1) {
         try {
           member1Data = await db.collection('members').findOne({ 
@@ -427,11 +430,11 @@ async function handleAnalyzeSynergy(data, res, log, errorLog) {
       }
     });
   } finally {
-    // Fermer la connexion MongoDB
-    if (mongoClient) {
+    // Fermer la connexion MongoDB locale
+    if (localMongoClient) {
       try {
-        await mongoClient.close();
-        mongoClient = null;
+        await localMongoClient.close();
+        log('🔒 Connexion MongoDB fermée');
       } catch (closeError) {
         log('⚠️ Erreur fermeture MongoDB:', closeError.message);
       }
