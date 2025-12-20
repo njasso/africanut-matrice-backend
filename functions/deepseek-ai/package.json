@@ -1,10 +1,10 @@
 {
   "name": "deepseek-ai",
-  "version": "5.0.0",
-  "description": "DeepSeek AI Integration for AppWrite",
+  "version": "4.0.0",
+  "description": "AppWrite function for DeepSeek AI integration",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Tests passed\" && exit 0"
+    "test": "echo \"Error: no test specified\" && exit 1"
   },
   "dependencies": {
     "mongodb": "^6.0.0"
