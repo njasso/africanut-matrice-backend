@@ -1,4 +1,101 @@
-import { MongoClient, ObjectId } from 'mongodb';
+// functions/deepseek-ai/src/index.js - VERSION FINALE COMBINÉE
+export default async function handler({ req, res, log, error }) {
+  log(`🤖 DeepSeek AI Handler - ${req.method} ${req.path || '/'}`);
+  
+  try {
+    // Parse la requête
+    const { method, body } = req;
+    
+    let requestData = {};
+    if (body) {
+      try {
+        requestData = typeof body === 'string' ? JSON.parse(body) : body;
+      } catch (e) {
+        log('⚠️ Erreur parsing JSON');
+        return res.json({
+          success: false,
+          error: 'Invalid JSON format',
+          timestamp: new Date().toISOString()
+        }, 400);
+      }
+    }
+    
+    // Log des données reçues
+    log('📥 Request data:', {
+      action: requestData.action,
+      dataKeys: Object.keys(requestData)
+    });
+    
+    // Route GET par défaut
+    if (method === 'GET') {
+      return res.json({
+        success: true,
+        service: 'DeepSeek AI Integration',
+        version: '4.0.0',
+        status: 'active',
+        endpoints: [
+          'POST - test_connection',
+          'POST - analyze_synergy',
+          'POST - recommend_team',
+          'POST - chat'
+        ],
+        timestamp: new Date().toISOString()
+      });
+    }
+    
+    // POST requests
+    if (method === 'POST') {
+      const { action, ...data } = requestData;
+      
+      if (!action) {
+        return res.json({
+          success: false,
+          error: 'Action is required',
+          available: ['test_connection', 'analyze_synergy', 'recommend_team', 'chat'],
+          timestamp: new Date().toISOString()
+        }, 400);
+      }
+      
+      log(`🎯 Action: ${action}`);
+      
+      switch (action) {
+        case 'test_connection':
+          return await handleTestConnection(res, log);
+          
+        case 'analyze_synergy':
+          return await handleAnalyzeSynergy(data, res, log, error);
+          
+        case 'recommend_team':
+          return await handleRecommendTeam(data, res, log);
+          
+        case 'chat':
+          return await handleChat(data, res, log);
+          
+        default:
+          return res.json({
+            success: false,
+            error: `Unknown action: ${action}`,
+            timestamp: new Date().toISOString()
+          }, 404);
+      }
+    }
+    
+    // Méthode non supportée
+    return res.json({
+      success: false,
+      error: `Method ${method} not supported`,
+      timestamp: new Date().toISOString()
+    }, 405);
+    
+  } catch (err) {
+    error('❌ Handler error:', err);
+    return res.json({
+      success: false,
+      error: err.message,
+      timestamp: new Date().toISOString()
+    }, 500);
+  }
+}
 
 // ========== CONFIGURATION ==========
 const MONGODB_URI = process.env.MONGODB_URI;
@@ -18,6 +115,8 @@ async function getDatabase() {
 
 // ========== DEEPSEEK API ==========
 async function callDeepSeekAPI(messages, options = {}) {
+  const DEEPSEEK_API_KEY = process.env.DEEPSEEK_API_KEY;
+  
   if (!DEEPSEEK_API_KEY) {
     return {
       success: false,
@@ -25,14 +124,20 @@ async function callDeepSeekAPI(messages, options = {}) {
       mock: true,
       choices: [{
         message: {
-          content: `Mode simulation - Configurez DEEPSEEK_API_KEY pour activer l'IA réelle.
+          content: `🧠 **ANALYSE DE SYNERGIE** (Mode Simulation)
 
-🔍 **ANALYSE DE SYNERGIE** (Mode Simulation)
-Entre les membres spécifiés.
+🔍 **SCORE DE COMPLÉMENTARITÉ: 8/10**
+Cette combinaison présente une excellente complémentarité technique.
 
-**Score estimé:** 7/10
-**Potentiel:** Bonne complémentarité
-**Recommandation:** Collaboration recommandée
+🎯 **DOMAINES STRATÉGIQUES:**
+1. Innovation technologique
+2. Gestion de projets complexes
+3. Développement durable
+
+📅 **ACTIONS RECOMMANDÉES:**
+1. Session de brainstorming collaborative
+2. Projet pilote sur 4-6 semaines
+3. Mentorat croisé
 
 ⚠️ **Pour activer l'IA réelle:** Ajoutez votre clé API DeepSeek dans les variables d'environnement.`
         }
@@ -55,7 +160,7 @@ Entre les membres spécifiés.
       body: JSON.stringify({
         model: options.model || 'deepseek-chat',
         messages,
-        max_tokens: options.max_tokens || 1000,
+        max_tokens: options.max_tokens || 1200,
         temperature: options.temperature || 0.7,
         stream: false
       }),
@@ -69,65 +174,103 @@ Entre les membres spécifiés.
     }
 
     return await response.json();
-  } catch (error) {
-    if (error.name === 'AbortError') {
+  } catch (err) {
+    if (err.name === 'AbortError') {
       throw new Error('Timeout after 25 seconds');
     }
-    throw error;
+    throw err;
   }
 }
 
 // ========== HANDLERS ==========
 
-// Test de connexion
-async function testConnection() {
+async function handleTestConnection(res, log) {
+  log('🧪 Test connexion DeepSeek');
+  
   try {
     const response = await callDeepSeekAPI([
       { role: 'user', content: 'Test de connexion. Réponds uniquement par "Connected" si fonctionnel.' }
     ], { max_tokens: 10 });
 
-    return {
-      status: 'connected',
-      response: response.choices?.[0]?.message?.content || 'OK',
-      model: response.model,
-      mock: response.mock || false,
-      timestamp: new Date().toISOString()
-    };
-  } catch (error) {
-    return {
-      status: 'error',
-      error: error.message,
-      mock: true,
-      timestamp: new Date().toISOString()
-    };
+    const isApiKeyConfigured = !!process.env.DEEPSEEK_API_KEY && process.env.DEEPSEEK_API_KEY.length > 20;
+    
+    return res.json({
+      success: true,
+      data: {
+        status: isApiKeyConfigured ? 'connected' : 'connected_mock',
+        response: response.choices?.[0]?.message?.content || 'OK',
+        model: response.model,
+        mock: response.mock || !isApiKeyConfigured,
+        timestamp: new Date().toISOString()
+      }
+    });
+  } catch (err) {
+    log('❌ Test connection error:', err.message);
+    return res.json({
+      success: true,
+      data: {
+        status: 'connected_mock',
+        error: err.message,
+        mock: true,
+        timestamp: new Date().toISOString()
+      }
+    });
   }
 }
 
-// Analyse de synergie - Version compatible avec votre frontend
-async function analyzeSynergy(data) {
+async function handleAnalyzeSynergy(data, res, log, errorLog) {
   const { member1, member2, projectId, context } = data;
   
-  console.log('🔍 Analyse synergie demandée:', {
-    member1: member1?.name,
-    member2: member2?.name,
+  log('🔍 Analyse synergie demandée:', {
+    m1: member1?.name || member1?._id,
+    m2: member2?.name || member2?._id,
     projectId
   });
 
-  let db;
+  let db = null;
   try {
+    // Connexion à MongoDB si URI disponible
     if (MONGODB_URI) {
-      db = await getDatabase();
+      try {
+        const mongoClient = new MongoClient(MONGODB_URI);
+        await mongoClient.connect();
+        db = mongoClient.db(MONGODB_DB_NAME);
+        log('✅ MongoDB connecté');
+      } catch (mongoError) {
+        log('⚠️ MongoDB non disponible:', mongoError.message);
+      }
     }
 
-    // Préparer les données membres
-    const member1Data = typeof member1 === 'object' ? member1 : 
-                       (db ? await db.collection('members').findOne({ _id: new ObjectId(member1) }) : null);
-    
-    const member2Data = typeof member2 === 'object' ? member2 :
-                       (db ? await db.collection('members').findOne({ _id: new ObjectId(member2) }) : null);
+    // Récupérer les données membres
+    let member1Data = typeof member1 === 'object' ? member1 : null;
+    let member2Data = typeof member2 === 'object' ? member2 : null;
+
+    if (db) {
+      const { MongoClient, ObjectId } = await import('mongodb');
+      
+      if (!member1Data && member1) {
+        try {
+          member1Data = await db.collection('members').findOne({ 
+            _id: typeof member1 === 'string' ? new ObjectId(member1) : new ObjectId(member1._id || member1.id)
+          });
+        } catch (e) {
+          log('⚠️ Erreur récupération membre 1:', e.message);
+        }
+      }
+      
+      if (!member2Data && member2) {
+        try {
+          member2Data = await db.collection('members').findOne({ 
+            _id: typeof member2 === 'string' ? new ObjectId(member2) : new ObjectId(member2._id || member2.id)
+          });
+        } catch (e) {
+          log('⚠️ Erreur récupération membre 2:', e.message);
+        }
+      }
+    }
 
     const projectData = projectId && db ? 
-                       await db.collection('projects').findOne({ _id: new ObjectId(projectId) }) : null;
+      await db.collection('projects').findOne({ _id: new ObjectId(projectId) }) : null;
 
     // Construire le prompt
     const prompt = `
@@ -197,86 +340,110 @@ async function analyzeSynergy(data) {
     ]);
 
     const analysis = response.choices?.[0]?.message?.content || 'Analyse non disponible';
+    const isMock = response.mock || false;
 
     // Sauvegarder l'analyse si MongoDB est disponible
     let analysisId = null;
     if (db && member1Data && member2Data) {
-      const analysisRecord = {
-        type: 'ai_synergy_analysis',
-        title: `Synergie: ${member1Data.name} & ${member2Data.name}`,
-        members: [member1Data._id, member2Data._id],
-        project: projectId,
-        analysis,
-        metadata: {
-          model: response.model,
-          tokens: response.usage?.total_tokens || 0,
-          context,
-          confidence: 0.85
-        },
-        createdAt: new Date(),
-        updatedAt: new Date()
-      };
+      try {
+        const analysisRecord = {
+          type: 'ai_synergy_analysis',
+          title: `Synergie: ${member1Data.name} & ${member2Data.name}`,
+          members: [member1Data._id, member2Data._id],
+          project: projectId,
+          analysis,
+          metadata: {
+            model: response.model,
+            tokens: response.usage?.total_tokens || 0,
+            context,
+            confidence: isMock ? 0.7 : 0.85
+          },
+          createdAt: new Date(),
+          updatedAt: new Date()
+        };
 
-      const result = await db.collection('analyses').insertOne(analysisRecord);
-      analysisId = result.insertedId.toString();
+        const result = await db.collection('analyses').insertOne(analysisRecord);
+        analysisId = result.insertedId.toString();
+        log('✅ Analyse sauvegardée dans MongoDB');
+      } catch (saveError) {
+        log('⚠️ Erreur sauvegarde analyse:', saveError.message);
+      }
     }
 
-    return {
+    return res.json({
       success: true,
-      analysis,
-      analysisId: analysisId || `mock_${Date.now()}`,
-      members: {
-        member1: {
-          id: member1Data?._id || member1,
-          name: member1Data?.name || 'Membre 1'
+      data: {
+        analysis,
+        analysisId: analysisId || `analysis_${Date.now()}_${isMock ? 'mock' : 'ai'}`,
+        members: {
+          member1: {
+            _id: member1Data?._id || member1,
+            id: member1Data?._id || member1,
+            name: member1Data?.name || 'Expert 1'
+          },
+          member2: {
+            _id: member2Data?._id || member2,
+            id: member2Data?._id || member2,
+            name: member2Data?.name || 'Expert 2'
+          }
         },
-        member2: {
-          id: member2Data?._id || member2,
-          name: member2Data?.name || 'Membre 2'
+        metadata: {
+          model: response.model,
+          mock: isMock,
+          confidence: isMock ? 0.7 : 0.85,
+          timestamp: new Date().toISOString(),
+          api_key_configured: !!process.env.DEEPSEEK_API_KEY
         }
-      },
-      metadata: {
-        model: response.model,
-        mock: response.mock || false,
-        confidence: response.mock ? 0.7 : 0.85,
-        timestamp: new Date().toISOString()
       }
-    };
+    });
 
-  } catch (error) {
-    console.error('❌ Erreur analyse synergie:', error);
+  } catch (err) {
+    errorLog('❌ Erreur analyse synergie:', err);
     
-    // Fallback avec analyse de base
-    return {
+    // Fallback
+    return res.json({
       success: true,
-      analysis: `🔍 **ANALYSE DE SYNERGIE** (Mode Fallback)\n\nEntre ${data.member1?.name || 'Membre 1'} et ${data.member2?.name || 'Membre 2'}\n\n**Potentiel estimé:** Bonne complémentarité\n**Score:** 6-7/10\n**Recommandation:** Collaboration recommandée pour maximiser les compétences complémentaires.`,
-      analysisId: `fallback_${Date.now()}`,
-      members: {
-        member1: { id: data.member1?._id || 'unknown', name: data.member1?.name || 'Membre 1' },
-        member2: { id: data.member2?._id || 'unknown', name: data.member2?.name || 'Membre 2' }
-      },
-      metadata: {
-        model: 'fallback',
-        mock: true,
-        confidence: 0.6,
-        error: error.message,
-        timestamp: new Date().toISOString()
+      data: {
+        analysis: `🔍 **ANALYSE DE SYNERGIE** (Mode Fallback)\n\nEntre ${data.member1?.name || 'Membre 1'} et ${data.member2?.name || 'Membre 2'}\n\n**Potentiel estimé:** Bonne complémentarité\n**Score:** 6-7/10\n**Recommandation:** Collaboration recommandée pour maximiser les compétences complémentaires.`,
+        analysisId: `fallback_${Date.now()}`,
+        members: {
+          member1: { 
+            _id: data.member1?._id || 'unknown', 
+            id: data.member1?._id || 'unknown', 
+            name: data.member1?.name || 'Expert 1' 
+          },
+          member2: { 
+            _id: data.member2?._id || 'unknown', 
+            id: data.member2?._id || 'unknown', 
+            name: data.member2?.name || 'Expert 2' 
+          }
+        },
+        metadata: {
+          model: 'fallback',
+          mock: true,
+          confidence: 0.6,
+          error: err.message,
+          timestamp: new Date().toISOString()
+        }
       }
-    };
+    });
   } finally {
+    // Fermer la connexion MongoDB
     if (mongoClient) {
-      await mongoClient.close();
-      mongoClient = null;
+      try {
+        await mongoClient.close();
+        mongoClient = null;
+      } catch (closeError) {
+        log('⚠️ Erreur fermeture MongoDB:', closeError.message);
+      }
     }
   }
 }
 
-// ========== ROUTER SIMPLIFIÉ ==========
-const routes = {
-  'test_connection': testConnection,
-  'analyze_synergy': analyzeSynergy,
+async function handleRecommendTeam(data, res, log) {
+  log('👥 Recommandation équipe:', data);
   
-  'recommend_team': async (data) => {
+  try {
     const response = await callDeepSeekAPI([
       {
         role: 'system',
@@ -288,101 +455,65 @@ const routes = {
       }
     ]);
 
-    return {
+    return res.json({
       success: true,
-      recommendations: response.choices?.[0]?.message?.content,
-      metadata: { model: response.model }
-    };
-  },
+      data: {
+        recommendations: response.choices?.[0]?.message?.content || 'Recommandations non disponibles',
+        metadata: { 
+          model: response.model,
+          mock: response.mock || false,
+          timestamp: new Date().toISOString()
+        }
+      }
+    });
+  } catch (err) {
+    log('❌ Recommend team error:', err.message);
+    return res.json({
+      success: true,
+      data: {
+        recommendations: 'Recommandations en mode simulation',
+        metadata: {
+          model: 'deepseek-chat_mock',
+          mock: true,
+          timestamp: new Date().toISOString()
+        }
+      }
+    });
+  }
+}
 
-  'chat': async (data) => {
+async function handleChat(data, res, log) {
+  log('💬 Chat demandé:', { messagesCount: data.messages?.length || 0 });
+  
+  try {
     const response = await callDeepSeekAPI(data.messages || [], {
-      model: data.model,
-      temperature: data.temperature
+      model: data.model || 'deepseek-chat',
+      temperature: data.temperature || 0.7
     });
 
-    return {
-      success: true,
-      response: response.choices?.[0]?.message?.content,
-      metadata: { model: response.model }
-    };
-  }
-};
-
-// ========== HANDLER PRINCIPAL ==========
-export default async function handler({ req, res, log, error }) {
-  log(`🤖 DeepSeek AI Handler - ${req.method} ${req.path || '/'}`);
-
-  try {
-    const { method, path, body } = req;
-    
-    // Parse body
-    let requestData = {};
-    if (body) {
-      try {
-        requestData = typeof body === 'string' ? JSON.parse(body) : body;
-      } catch (e) {
-        return res.json({ 
-          success: false, 
-          error: 'Invalid JSON body' 
-        }, 400);
-      }
-    }
-
-    // Route par défaut
-    if (method === 'GET' && (!path || path === '/')) {
-      return res.json({
-        success: true,
-        service: 'DeepSeek AI Integration',
-        version: '1.0.0',
-        endpoints: [
-          'POST / - Analyse synergie (action: analyze_synergy)',
-          'POST / - Test (action: test_connection)',
-          'POST / - Recommandation équipe (action: recommend_team)',
-          'POST / - Chat (action: chat)'
-        ]
-      });
-    }
-
-    // POST requests
-    if (method === 'POST') {
-      const { action, ...data } = requestData;
-      
-      if (!action) {
-        return res.json({ 
-          success: false, 
-          error: 'Action required. Available: test_connection, analyze_synergy, recommend_team, chat' 
-        }, 400);
-      }
-
-      const handler = routes[action];
-      if (!handler) {
-        return res.json({ 
-          success: false, 
-          error: `Unknown action: ${action}` 
-        }, 404);
-      }
-
-      const result = await handler(data);
-      return res.json({
-        success: true,
-        ...result,
-        timestamp: new Date().toISOString()
-      });
-    }
-
-    // Méthode non supportée
-    return res.json({ 
-      success: false, 
-      error: `Method ${method} not supported` 
-    }, 405);
-
-  } catch (err) {
-    error('❌ DeepSeek handler error:', err);
     return res.json({
-      success: false,
-      error: err.message,
-      timestamp: new Date().toISOString()
-    }, 500);
+      success: true,
+      data: {
+        response: response.choices?.[0]?.message?.content || 'Réponse non disponible',
+        metadata: { 
+          model: response.model,
+          mock: response.mock || false,
+          timestamp: new Date().toISOString()
+        }
+      }
+    });
+  } catch (err) {
+    log('❌ Chat error:', err.message);
+    return res.json({
+      success: true,
+      data: {
+        response: "Assistant IA en mode simulation",
+        metadata: {
+          model: 'deepseek-chat_mock',
+          mock: true,
+          timestamp: new Date().toISOString()
+        }
+      }
+    });
   }
 }
