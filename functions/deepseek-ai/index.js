@@ -1,4 +1,3 @@
-// functions/deepseek-ai/src/index.js - VERSION FINALE COMBINÉE
 export default async function handler({ req, res, log, error }) {
   log(`🤖 DeepSeek AI Handler - ${req.method} ${req.path || '/'}`);
   
